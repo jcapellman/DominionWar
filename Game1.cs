@@ -511,6 +511,8 @@ public class Game1 : Game
                     _spriteBatch.Draw(_pixel, new Rectangle((int)star.Position.X, (int)star.Position.Y, star.Size, star.Size), star.Color);
             }
 
+            DrawText("STRATEGIC VIEW", 58, 24, Color.White, 4);
+
             int midY = GraphicsDevice.Viewport.Height / 2;
 
             // Federation Side
@@ -527,6 +529,10 @@ public class Game1 : Game
             {
                 _spriteBatch.Draw(_pixel, new Rectangle(100, midY - fedH / 2, fedW, fedH), Color.Blue);
             }
+
+            string fedLabel = "FEDERATION";
+            int fedLabelWidth = fedLabel.Length * 3 * 4;
+            DrawText(fedLabel, 100 + (fedW / 2) - (fedLabelWidth / 2), midY - fedH / 2 - 24, Color.Cyan, 3);
 
             int fedBarX = 100 + fedW + 20;
             int fedBarY = midY - 20;
@@ -550,6 +556,10 @@ public class Game1 : Game
                 _spriteBatch.Draw(_pixel, new Rectangle(GraphicsDevice.Viewport.Width - 100 - domW, midY - domH / 2, domW, domH), Color.Red);
             }
 
+            string domLabel = "DOMINION";
+            int domLabelWidth = domLabel.Length * 3 * 4;
+            DrawText(domLabel, (GraphicsDevice.Viewport.Width - 100 - domW) + (domW / 2) - (domLabelWidth / 2), midY - domH / 2 - 24, Color.OrangeRed, 3);
+
             int domBarRight = GraphicsDevice.Viewport.Width - 100 - domW - 20;
             int domBarY = midY - 20;
             _spriteBatch.Draw(_pixel, new Rectangle(domBarRight - 304, domBarY, 304, 40), Color.DarkRed * 0.55f);
@@ -568,7 +578,9 @@ public class Game1 : Game
             // Flashing Start prompt
             if ((int)(gameTime.TotalGameTime.TotalSeconds * 2) % 2 == 0)
             {
-                _spriteBatch.Draw(_pixel, new Rectangle(GraphicsDevice.Viewport.Width / 2 - 150, GraphicsDevice.Viewport.Height - 100, 300, 20), Color.White * 0.6f);
+                int promptX = GraphicsDevice.Viewport.Width / 2 - 180;
+                int promptY = GraphicsDevice.Viewport.Height - 102;
+                DrawText("PRESS ENTER TO START", promptX + 16, promptY + 5, Color.White, 4);
             }
         }
         else if (_currentState == GameState.TacticalMission)
@@ -698,6 +710,7 @@ public class Game1 : Game
         {
             // Background overlay
             _spriteBatch.Draw(_pixel, new Rectangle(100, 100, 600, 400), Color.DarkBlue * 0.9f);
+            _spriteBatch.Draw(_pixel, new Rectangle(104, 104, 592, 392), Color.Black * 0.35f);
 
             int startX = 250;
             int startY = 150;
@@ -725,11 +738,10 @@ public class Game1 : Game
 
             if (_reportTimer <= 0)
             {
-                // Flashing Space Bar prompt
-                if ((int)(gameTime.TotalGameTime.TotalSeconds * 2) % 2 == 0)
-                {
-                    _spriteBatch.Draw(_pixel, new Rectangle(250, 450, 300, 20), Color.White * 0.6f);
-                }
+                _spriteBatch.Draw(_pixel, new Rectangle(145, 420, 410, 44), Color.Black * 0.75f);
+                _spriteBatch.Draw(_pixel, new Rectangle(145, 420, 410, 4), Color.Cyan);
+                _spriteBatch.Draw(_pixel, new Rectangle(145, 460, 410, 4), Color.OrangeRed);
+                DrawText("PRESS SPACE OR ENTER", 158, 428, Color.White, 5);
             }
         }
         else if (_currentState == GameState.GameOverVictory)
@@ -760,6 +772,55 @@ public class Game1 : Game
                         _spriteBatch.Draw(_pixel, new Rectangle(x + i * (4 * scale) + col * scale, y + row * scale, scale, scale), color);
                 }
             }
+        }
+    }
+
+    private void DrawText(string text, int x, int y, Color color, int scale = 4)
+    {
+        int cursorX = x;
+        foreach (char ch in text.ToUpperInvariant())
+        {
+            if (ch == ' ')
+            {
+                cursorX += scale * 4;
+                continue;
+            }
+
+            int[,] glyph = ch switch
+            {
+                'A' => new[,] { { 0, 1, 0 }, { 1, 0, 1 }, { 1, 1, 1 }, { 1, 0, 1 }, { 1, 0, 1 } },
+                'C' => new[,] { { 0, 1, 1 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 0, 1, 1 } },
+                'D' => new[,] { { 1, 1, 0 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 1, 0 } },
+                'E' => new[,] { { 1, 1, 1 }, { 1, 0, 0 }, { 1, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 } },
+                'F' => new[,] { { 1, 1, 1 }, { 1, 0, 0 }, { 1, 1, 0 }, { 1, 0, 0 }, { 1, 0, 0 } },
+                'G' => new[,] { { 0, 1, 1 }, { 1, 0, 0 }, { 1, 0, 1 }, { 1, 0, 1 }, { 0, 1, 1 } },
+                'H' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 1, 1, 1 }, { 1, 0, 1 }, { 1, 0, 1 } },
+                'I' => new[,] { { 1, 1, 1 }, { 0, 1, 0 }, { 0, 1, 0 }, { 0, 1, 0 }, { 1, 1, 1 } },
+                'N' => new[,] { { 1, 0, 1 }, { 1, 1, 1 }, { 1, 1, 1 }, { 1, 0, 1 }, { 1, 0, 1 } },
+                'L' => new[,] { { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 1, 1 } },
+                'M' => new[,] { { 1, 0, 1 }, { 1, 1, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 } },
+                'O' => new[,] { { 0, 1, 0 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 0, 1, 0 } },
+                'P' => new[,] { { 1, 1, 0 }, { 1, 0, 1 }, { 1, 1, 0 }, { 1, 0, 0 }, { 1, 0, 0 } },
+                'R' => new[,] { { 1, 1, 0 }, { 1, 0, 1 }, { 1, 1, 0 }, { 1, 0, 1 }, { 1, 0, 1 } },
+                'S' => new[,] { { 0, 1, 1 }, { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 1, 0 } },
+                'T' => new[,] { { 1, 1, 1 }, { 0, 1, 0 }, { 0, 1, 0 }, { 0, 1, 0 }, { 0, 1, 0 } },
+                'V' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 } },
+                'W' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 1, 1 }, { 1, 0, 1 } },
+                'U' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 0, 1, 0 } },
+                '/' => new[,] { { 0, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 0, 0 } },
+                _ => new[,] { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } }
+            };
+
+            for (int row = 0; row < 5; row++)
+            {
+                for (int col = 0; col < 3; col++)
+                {
+                    if (glyph[row, col] == 1)
+                        _spriteBatch.Draw(_pixel, new Rectangle(cursorX + col * scale, y + row * scale, scale, scale), color);
+                }
+            }
+
+            cursorX += scale * 4;
         }
     }
 }
