@@ -13,6 +13,10 @@ public class Game1 : Game
     private SpriteBatch _spriteBatch;
     private Texture2D _pixel;
     private Texture2D _oberthTexture;
+    private Texture2D _jemHadarFighterTexture;
+    private Texture2D _jemHadarBattleshipTexture;
+    private Texture2D _constitutionTexture;
+    private Texture2D _excelsiorTexture;
 
     struct Star
     {
@@ -23,12 +27,19 @@ public class Game1 : Game
     }
     private List<Star> _stars = new List<Star>();
 
+    public class Enemy
+    {
+        public Vector2 Position;
+        public bool IsBoss;
+        public int Health;
+    }
+
     // Game States
     enum GameState { StrategicView, TacticalMission, GameOverVictory, GameOverDefeat }
     private GameState _currentState = GameState.StrategicView;
 
     // Player Data
-    enum ShipClass { Oberth, Miranda, Excelsior, Defiant, Akira, Galaxy, Sovereign }
+    enum ShipClass { Oberth, Constitution, Excelsior, Defiant, Akira, Galaxy, Sovereign }
     private ShipClass _playerShip = ShipClass.Oberth;
     private int _missionsCompleted = 0;
     private int _dominionStrength = 100;
@@ -51,7 +62,7 @@ public class Game1 : Game
 
     // Tactical Data
     private Vector2 _playerPos;
-    private List<Vector2> _enemies = new List<Vector2>();
+    private List<Enemy> _enemies = new List<Enemy>();
     private List<Vector2> _torpedoes = new List<Vector2>();
     private List<Vector2> _enemyProjectiles = new List<Vector2>();
     private Random _rng = new Random();
@@ -77,7 +88,11 @@ public class Game1 : Game
         _pixel = new Texture2D(GraphicsDevice, 1, 1);
         _pixel.SetData(new[] { Color.White });
 
-        _oberthTexture = Texture2D.FromFile(GraphicsDevice, "assets/ships/Oberth.png");
+        try { _oberthTexture = Texture2D.FromFile(GraphicsDevice, "assets/ships/Oberth.png"); } catch { }
+        try { _constitutionTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Consitution.png"); } catch { }
+        try { _excelsiorTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Excelsior.png"); } catch { }
+        try { _jemHadarFighterTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Vanguard.png"); } catch { }
+        try { _jemHadarBattleshipTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/JemHadar_Battleship.png"); } catch { }
 
         for (int i = 0; i < 150; i++)
         {
@@ -120,9 +135,18 @@ public class Game1 : Game
                 _enemies.Clear();
                 _torpedoes.Clear();
                 _enemyProjectiles.Clear();
-                int enemyCount = _rng.Next(1, 4 + _missionsCompleted);
-                for(int i = 0; i < enemyCount; i++)
-                    _enemies.Add(new Vector2(_rng.Next(0,800), _rng.Next(0, 200)));
+
+                bool isBoss = (_missionsCompleted > 0 && _missionsCompleted % 3 == 0);
+                if (isBoss)
+                {
+                    _enemies.Add(new Enemy { Position = new Vector2(400, 100), IsBoss = true, Health = 100 });
+                }
+                else
+                {
+                    int enemyCount = _rng.Next(1, 4 + _missionsCompleted);
+                    for(int i = 0; i < enemyCount; i++)
+                        _enemies.Add(new Enemy { Position = new Vector2(_rng.Next(0,800), _rng.Next(0, 200)), IsBoss = false, Health = 20 });
+                }
             }
         }
         else if (_currentState == GameState.TacticalMission)
@@ -132,6 +156,9 @@ public class Game1 : Game
             if (kb.IsKeyDown(Keys.S)) _playerPos.Y += 200f * (float)gameTime.ElapsedGameTime.TotalSeconds;
             if (kb.IsKeyDown(Keys.A)) _playerPos.X -= 200f * (float)gameTime.ElapsedGameTime.TotalSeconds;
             if (kb.IsKeyDown(Keys.D)) _playerPos.X += 200f * (float)gameTime.ElapsedGameTime.TotalSeconds;
+
+            _playerPos.X = MathHelper.Clamp(_playerPos.X, 30, GraphicsDevice.Viewport.Width - 30);
+            _playerPos.Y = MathHelper.Clamp(_playerPos.Y, 30, GraphicsDevice.Viewport.Height - 30);
 
             // Fire torpedoes
             if (kb.IsKeyDown(Keys.Space) && _torpedoes.Count < 5)
@@ -166,19 +193,21 @@ public class Game1 : Game
             for (int i = _enemies.Count - 1; i >= 0; i--)
             {
                 won = false;
-                _enemies[i] = new Vector2(_enemies[i].X, _enemies[i].Y + 50f * (float)gameTime.ElapsedGameTime.TotalSeconds);
+                var enemy = _enemies[i];
+                enemy.Position.Y += (enemy.IsBoss ? 10f : 50f) * (float)gameTime.ElapsedGameTime.TotalSeconds;
 
                 // Enemies fire back randomly
-                if (_rng.NextDouble() < 0.01)
+                if (_rng.NextDouble() < (enemy.IsBoss ? 0.05 : 0.01))
                 {
-                    _enemyProjectiles.Add(new Vector2(_enemies[i].X, _enemies[i].Y + 15));
+                    _enemyProjectiles.Add(new Vector2(enemy.Position.X, enemy.Position.Y + (enemy.IsBoss ? 50 : 15)));
                 }
 
                 // Collision with torpedoes
                 bool hit = false;
                 for (int j = _torpedoes.Count - 1; j >= 0; j--)
                 {
-                    if (Vector2.Distance(_enemies[i], _torpedoes[j]) < 30)
+                    float hitRadius = enemy.IsBoss ? 50 : 30;
+                    if (Vector2.Distance(enemy.Position, _torpedoes[j]) < hitRadius)
                     {
                         hit = true;
                         _score += 100;
@@ -189,12 +218,17 @@ public class Game1 : Game
 
                 if (hit)
                 {
-                    _enemies.RemoveAt(i);
+                    enemy.Health -= 20;
+                    if (enemy.Health <= 0)
+                    {
+                        if (enemy.IsBoss) _score += 1000;
+                        _enemies.RemoveAt(i);
+                    }
                 }
-                else if (_enemies[i].Y > 600 || Vector2.Distance(_enemies[i], _playerPos) < 40)
+                else if (enemy.Position.Y > 600 || Vector2.Distance(enemy.Position, _playerPos) < (enemy.IsBoss ? 70 : 40))
                 {
                     // Enemy escaped or hit player, take shield damage
-                    _playerShields -= 20;
+                    _playerShields -= enemy.IsBoss ? 50 : 20;
                     _enemies.RemoveAt(i);
                 }
             }
@@ -272,22 +306,73 @@ public class Game1 : Game
                 playerRect = new Rectangle((int)_playerPos.X - w / 2, (int)_playerPos.Y - h / 2, w, h);
                 _spriteBatch.Draw(_oberthTexture, playerRect, Color.White);
             }
+            else if (_playerShip == ShipClass.Constitution && _constitutionTexture != null)
+            {
+                float scale = 80f / Math.Max(_constitutionTexture.Width, _constitutionTexture.Height);
+                int w = (int)(_constitutionTexture.Width * scale);
+                int h = (int)(_constitutionTexture.Height * scale);
+                playerRect = new Rectangle((int)_playerPos.X - w / 2, (int)_playerPos.Y - h / 2, w, h);
+                _spriteBatch.Draw(_constitutionTexture, playerRect, Color.White);
+            }
+            else if (_playerShip == ShipClass.Excelsior && _excelsiorTexture != null)
+            {
+                float scale = 96f / Math.Max(_excelsiorTexture.Width, _excelsiorTexture.Height);
+                int w = (int)(_excelsiorTexture.Width * scale);
+                int h = (int)(_excelsiorTexture.Height * scale);
+                playerRect = new Rectangle((int)_playerPos.X - w / 2, (int)_playerPos.Y - h / 2, w, h);
+                _spriteBatch.Draw(_excelsiorTexture, playerRect, Color.White);
+            }
             else
             {
                 _spriteBatch.Draw(_pixel, playerRect, Color.Cyan);
             }
 
-            // Draw Torpedoes
+            // Draw Torpedoes (Photon Torpedoes)
             foreach(var torp in _torpedoes)
-                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.X - 2, (int)torp.Y - 2, 4, 8), Color.Orange);
+            {
+                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.X - 4, (int)torp.Y - 5, 8, 10), Color.OrangeRed);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.X - 2, (int)torp.Y - 3, 4, 6), Color.LightYellow);
+            }
 
-            // Draw Enemy Projectiles
+            // Draw Enemy Projectiles (Dominion Polaron Beams)
             foreach(var proj in _enemyProjectiles)
-                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.X - 2, (int)proj.Y - 2, 4, 8), Color.Red);
+            {
+                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.X - 2, (int)proj.Y - 10, 4, 20), Color.DarkMagenta);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.X - 1, (int)proj.Y - 8, 2, 16), Color.Cyan);
+            }
 
             // Draw Enemies (JemHadar/Breen/Cardassian represented as pink/purple boxes)
             foreach(var enemy in _enemies)
-                _spriteBatch.Draw(_pixel, new Rectangle((int)enemy.X - 15, (int)enemy.Y - 15, 30, 30), Color.Magenta);
+            {
+                if (enemy.IsBoss)
+                {
+                    if (_jemHadarBattleshipTexture != null)
+                    {
+                        float scale = 128f / Math.Max(_jemHadarBattleshipTexture.Width, _jemHadarBattleshipTexture.Height);
+                        int w = (int)(_jemHadarBattleshipTexture.Width * scale);
+                        int h = (int)(_jemHadarBattleshipTexture.Height * scale);
+                        _spriteBatch.Draw(_jemHadarBattleshipTexture, new Rectangle((int)enemy.Position.X - w / 2, (int)enemy.Position.Y - h / 2, w, h), Color.White);
+                    }
+                    else
+                    {
+                        _spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - 40, (int)enemy.Position.Y - 40, 80, 80), Color.DarkMagenta);
+                    }
+                }
+                else
+                {
+                    if (_jemHadarFighterTexture != null)
+                    {
+                        float scale = 64f / Math.Max(_jemHadarFighterTexture.Width, _jemHadarFighterTexture.Height);
+                        int w = (int)(_jemHadarFighterTexture.Width * scale);
+                        int h = (int)(_jemHadarFighterTexture.Height * scale);
+                        _spriteBatch.Draw(_jemHadarFighterTexture, new Rectangle((int)enemy.Position.X - w / 2, (int)enemy.Position.Y - h / 2, w, h), Color.White);
+                    }
+                    else
+                    {
+                        _spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - 15, (int)enemy.Position.Y - 15, 30, 30), Color.Magenta);
+                    }
+                }
+            }
         }
         else if (_currentState == GameState.GameOverVictory)
         {
