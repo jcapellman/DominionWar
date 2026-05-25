@@ -514,24 +514,56 @@ public class Game1 : Game
             int midY = GraphicsDevice.Viewport.Height / 2;
 
             // Federation Side
+            int fedH = 128;
+            int fedW = 128;
             if (_federationLogo != null)
-                _spriteBatch.Draw(_federationLogo, new Rectangle(100, midY - 64, 128, 128), Color.White);
+            {
+                float fedScale = 128f / Math.Max(_federationLogo.Width, _federationLogo.Height);
+                fedW = (int)(_federationLogo.Width * fedScale);
+                fedH = (int)(_federationLogo.Height * fedScale);
+                _spriteBatch.Draw(_federationLogo, new Rectangle(100, midY - fedH / 2, fedW, fedH), Color.White);
+            }
             else
-                _spriteBatch.Draw(_pixel, new Rectangle(100, midY - 64, 128, 128), Color.Blue);
+            {
+                _spriteBatch.Draw(_pixel, new Rectangle(100, midY - fedH / 2, fedW, fedH), Color.Blue);
+            }
 
-            _spriteBatch.Draw(_pixel, new Rectangle(250, midY - 20, Math.Max(0, _federationStrength) * 3, 40), Color.Cyan);
+            int fedBarX = 100 + fedW + 20;
+            int fedBarY = midY - 20;
+            _spriteBatch.Draw(_pixel, new Rectangle(fedBarX, fedBarY, 304, 40), Color.DarkBlue * 0.55f);
+            int fedSegments = Math.Max(0, _federationStrength) / 5;
+            for (int i = 0; i < fedSegments; i++)
+                _spriteBatch.Draw(_pixel, new Rectangle(fedBarX + 4 + i * 15, fedBarY + 5, 11, 30), Color.Cyan);
 
             // Dominion Side
+            int domH = 128;
+            int domW = 128;
             if (_dominionLogo != null)
-                _spriteBatch.Draw(_dominionLogo, new Rectangle(570, midY - 64, 128, 128), Color.White);
+            {
+                float domScale = 128f / Math.Max(_dominionLogo.Width, _dominionLogo.Height);
+                domW = (int)(_dominionLogo.Width * domScale);
+                domH = (int)(_dominionLogo.Height * domScale);
+                _spriteBatch.Draw(_dominionLogo, new Rectangle(GraphicsDevice.Viewport.Width - 100 - domW, midY - domH / 2, domW, domH), Color.White);
+            }
             else
-                _spriteBatch.Draw(_pixel, new Rectangle(570, midY - 64, 128, 128), Color.Red);
+            {
+                _spriteBatch.Draw(_pixel, new Rectangle(GraphicsDevice.Viewport.Width - 100 - domW, midY - domH / 2, domW, domH), Color.Red);
+            }
 
-            _spriteBatch.Draw(_pixel, new Rectangle(550 - Math.Max(0, _dominionStrength) * 3, midY - 20, Math.Max(0, _dominionStrength) * 3, 40), Color.OrangeRed);
+            int domBarRight = GraphicsDevice.Viewport.Width - 100 - domW - 20;
+            int domBarY = midY - 20;
+            _spriteBatch.Draw(_pixel, new Rectangle(domBarRight - 304, domBarY, 304, 40), Color.DarkRed * 0.55f);
+            int domSegments = Math.Max(0, _dominionStrength) / 5;
+            for (int i = 0; i < domSegments; i++)
+                _spriteBatch.Draw(_pixel, new Rectangle(domBarRight - 15 - i * 15, domBarY + 5, 11, 30), Color.OrangeRed);
 
             // Player class marker (e.g. size reflects ship class)
-            int shipSize = 10 + (int)_playerShip * 5;
-            _spriteBatch.Draw(_pixel, new Rectangle(150, midY + 100, shipSize, shipSize), Color.White);
+            int shipMarkerSize = 64 + (int)_playerShip * 16;
+            Rectangle shipRect = new Rectangle(GraphicsDevice.Viewport.Width / 2 - shipMarkerSize / 2, midY + 40, shipMarkerSize, shipMarkerSize);
+            if (_playerShip == ShipClass.Oberth && _oberthTexture != null) _spriteBatch.Draw(_oberthTexture, shipRect, Color.White);
+            else if (_playerShip == ShipClass.Constitution && _constitutionTexture != null) _spriteBatch.Draw(_constitutionTexture, shipRect, Color.White);
+            else if (_playerShip == ShipClass.Excelsior && _excelsiorTexture != null) _spriteBatch.Draw(_excelsiorTexture, shipRect, Color.White);
+            else _spriteBatch.Draw(_pixel, shipRect, Color.White);
 
             // Flashing Start prompt
             if ((int)(gameTime.TotalGameTime.TotalSeconds * 2) % 2 == 0)
