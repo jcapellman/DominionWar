@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework;
@@ -19,6 +19,11 @@ public class Game1 : Game
     private Texture2D _jemHadarBattleshipTexture;
     private Texture2D _constitutionTexture;
     private Texture2D _excelsiorTexture;
+
+    // Strategic View Textures
+    private Texture2D _strategicBackground;
+    private Texture2D _federationLogo;
+    private Texture2D _dominionLogo;
 
     struct BackgroundElement
     {
@@ -192,6 +197,10 @@ public class Game1 : Game
         try { _excelsiorTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Excelsior.png"); } catch { }
         try { _jemHadarFighterTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Vanguard.png"); } catch { }
         try { _jemHadarBattleshipTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/JemHadar_Battleship.png"); } catch { }
+
+        try { _strategicBackground = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Background_Strategic.png"); } catch { }
+        try { _federationLogo = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Faction_Federation_Logo.png"); } catch { }
+        try { _dominionLogo = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Faction_Dominion_Logo.png"); } catch { }
 
         for (int i = 0; i < 150; i++)
         {
@@ -491,16 +500,44 @@ public class Game1 : Game
 
         if (_currentState == GameState.StrategicView)
         {
-            // Simple visual representation of strategic map
-            _spriteBatch.Draw(_pixel, new Rectangle(100, 100, (_federationStrength * 3), 40), Color.Blue);
-            _spriteBatch.Draw(_pixel, new Rectangle(100, 200, (_dominionStrength * 3), 40), Color.Red);
+            if (_strategicBackground != null)
+            {
+                _spriteBatch.Draw(_strategicBackground, new Rectangle(0, 0, GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height), Color.White);
+            }
+            else
+            {
+                // Fallback starfield if no background image
+                foreach (var star in _stars)
+                    _spriteBatch.Draw(_pixel, new Rectangle((int)star.Position.X, (int)star.Position.Y, star.Size, star.Size), star.Color);
+            }
+
+            int midY = GraphicsDevice.Viewport.Height / 2;
+
+            // Federation Side
+            if (_federationLogo != null)
+                _spriteBatch.Draw(_federationLogo, new Rectangle(100, midY - 64, 128, 128), Color.White);
+            else
+                _spriteBatch.Draw(_pixel, new Rectangle(100, midY - 64, 128, 128), Color.Blue);
+
+            _spriteBatch.Draw(_pixel, new Rectangle(250, midY - 20, Math.Max(0, _federationStrength) * 3, 40), Color.Cyan);
+
+            // Dominion Side
+            if (_dominionLogo != null)
+                _spriteBatch.Draw(_dominionLogo, new Rectangle(570, midY - 64, 128, 128), Color.White);
+            else
+                _spriteBatch.Draw(_pixel, new Rectangle(570, midY - 64, 128, 128), Color.Red);
+
+            _spriteBatch.Draw(_pixel, new Rectangle(550 - Math.Max(0, _dominionStrength) * 3, midY - 20, Math.Max(0, _dominionStrength) * 3, 40), Color.OrangeRed);
 
             // Player class marker (e.g. size reflects ship class)
             int shipSize = 10 + (int)_playerShip * 5;
-            _spriteBatch.Draw(_pixel, new Rectangle(100, 300, shipSize, shipSize), Color.White);
+            _spriteBatch.Draw(_pixel, new Rectangle(150, midY + 100, shipSize, shipSize), Color.White);
 
-            // Blue represents Federation health, Red represents Dominion health
-            // White box represents current ship (gets bigger as promoted)
+            // Flashing Start prompt
+            if ((int)(gameTime.TotalGameTime.TotalSeconds * 2) % 2 == 0)
+            {
+                _spriteBatch.Draw(_pixel, new Rectangle(GraphicsDevice.Viewport.Width / 2 - 150, GraphicsDevice.Viewport.Height - 100, 300, 20), Color.White * 0.6f);
+            }
         }
         else if (_currentState == GameState.TacticalMission)
         {
