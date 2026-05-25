@@ -12,6 +12,7 @@ public class Game1 : Game
     private GraphicsDeviceManager _graphics;
     private SpriteBatch _spriteBatch;
     private Texture2D _pixel;
+    private Texture2D _particleTexture;
     private Texture2D _oberthTexture;
     private Texture2D _jemHadarFighterTexture;
     private Texture2D _jemHadarBattleshipTexture;
@@ -26,6 +27,14 @@ public class Game1 : Game
         public int Size;
     }
     private List<Star> _stars = new List<Star>();
+
+    struct Explosion
+    {
+        public Vector2 Position;
+        public float Timer;
+        public float Duration;
+        public float MaxRadius;
+    }
 
     public class Enemy
     {
@@ -65,7 +74,13 @@ public class Game1 : Game
     private List<Enemy> _enemies = new List<Enemy>();
     private List<Vector2> _torpedoes = new List<Vector2>();
     private List<Vector2> _enemyProjectiles = new List<Vector2>();
+    private List<Explosion> _explosions = new List<Explosion>();
     private Random _rng = new Random();
+
+    // Camera/Effects
+    private Vector2 _cameraOffset = Vector2.Zero;
+    private float _screenShakeTimer = 0f;
+    private float _screenShakeMagnitude = 0f;
 
     public Game1()
     {
@@ -87,6 +102,20 @@ public class Game1 : Game
 
         _pixel = new Texture2D(GraphicsDevice, 1, 1);
         _pixel.SetData(new[] { Color.White });
+
+        _particleTexture = new Texture2D(GraphicsDevice, 32, 32);
+        Color[] pData = new Color[32 * 32];
+        Vector2 center = new Vector2(16, 16);
+        for (int y = 0; y < 32; y++)
+        {
+            for (int x = 0; x < 32; x++)
+            {
+                float dist = Vector2.Distance(center, new Vector2(x, y));
+                float alpha = (float)Math.Pow(1f - MathHelper.Clamp(dist / 16f, 0, 1), 2);
+                pData[y * 32 + x] = Color.White * alpha;
+            }
+        }
+        _particleTexture.SetData(pData);
 
         try { _oberthTexture = Texture2D.FromFile(GraphicsDevice, "assets/ships/Oberth.png"); } catch { }
         try { _constitutionTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Consitution.png"); } catch { }
@@ -135,6 +164,9 @@ public class Game1 : Game
                 _enemies.Clear();
                 _torpedoes.Clear();
                 _enemyProjectiles.Clear();
+                _explosions.Clear();
+                _screenShakeTimer = 0f;
+                _cameraOffset = Vector2.Zero;
 
                 bool isBoss = (_missionsCompleted > 0 && _missionsCompleted % 3 == 0);
                 if (isBoss)
@@ -221,7 +253,19 @@ public class Game1 : Game
                     enemy.Health -= 20;
                     if (enemy.Health <= 0)
                     {
-                        if (enemy.IsBoss) _score += 1000;
+                        if (enemy.IsBoss) 
+                        {
+                            _score += 1000;
+                            _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 2.0f, MaxRadius = 1200f });
+                            _screenShakeTimer = 1.5f;
+                            _screenShakeMagnitude = 25f;
+                        }
+                        else
+                        {
+                            _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 1.0f, MaxRadius = 400f });
+                            _screenShakeTimer = 0.3f;
+                            _screenShakeMagnitude = 5f;
+                        }
                         _enemies.RemoveAt(i);
                     }
                 }
@@ -231,6 +275,33 @@ public class Game1 : Game
                     _playerShields -= enemy.IsBoss ? 50 : 20;
                     _enemies.RemoveAt(i);
                 }
+            }
+
+            // Update Explosions
+            for (int i = _explosions.Count - 1; i >= 0; i--)
+            {
+                var exp = _explosions[i];
+                exp.Timer += (float)gameTime.ElapsedGameTime.TotalSeconds;
+                if (exp.Timer >= exp.Duration)
+                {
+                    _explosions.RemoveAt(i);
+                }
+                else
+                {
+                    _explosions[i] = exp;
+                }
+            }
+
+            if (_screenShakeTimer > 0)
+            {
+                _screenShakeTimer -= (float)gameTime.ElapsedGameTime.TotalSeconds;
+                _cameraOffset = new Vector2(
+                    ((float)_rng.NextDouble() * 2 - 1) * _screenShakeMagnitude,
+                    ((float)_rng.NextDouble() * 2 - 1) * _screenShakeMagnitude);
+            }
+            else
+            {
+                _cameraOffset = Vector2.Zero;
             }
 
             if (_playerShields <= 0)
@@ -265,7 +336,7 @@ public class Game1 : Game
     {
         GraphicsDevice.Clear(Color.Black);
 
-        _spriteBatch.Begin();
+        _spriteBatch.Begin(transformMatrix: Matrix.CreateTranslation(_cameraOffset.X, _cameraOffset.Y, 0));
 
         if (_currentState == GameState.StrategicView)
         {
@@ -339,6 +410,24 @@ public class Game1 : Game
             {
                 _spriteBatch.Draw(_pixel, new Rectangle((int)proj.X - 2, (int)proj.Y - 10, 4, 20), Color.DarkMagenta);
                 _spriteBatch.Draw(_pixel, new Rectangle((int)proj.X - 1, (int)proj.Y - 8, 2, 16), Color.Cyan);
+            }
+
+            // Draw Explosions
+            foreach (var exp in _explosions)
+            {
+                float progress = exp.Timer / exp.Duration;
+                float currentRadius = exp.MaxRadius * (float)Math.Sqrt(progress);
+                Color expColor = Color.Lerp(new Color(255, 200, 0), Color.DarkRed, progress);
+                expColor *= (1f - progress); // fade out
+                int size = (int)currentRadius;
+
+                // Outer fire glow
+                _spriteBatch.Draw(_particleTexture, new Rectangle((int)exp.Position.X - size / 2, (int)exp.Position.Y - size / 2, size, size), expColor);
+
+                // Hot core
+                int coreSize = (int)(size * 0.6f);
+                Color coreColor = Color.White * (1f - progress);
+                _spriteBatch.Draw(_particleTexture, new Rectangle((int)exp.Position.X - coreSize / 2, (int)exp.Position.Y - coreSize / 2, coreSize, coreSize), coreColor);
             }
 
             // Draw Enemies (JemHadar/Breen/Cardassian represented as pink/purple boxes)
