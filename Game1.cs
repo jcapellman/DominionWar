@@ -26,7 +26,7 @@ public class Game1 : Game
     private Texture2D _dominionLogo;
     private RenderTarget2D _sceneTarget;
 
-    enum EnemyType { Fighter, Interceptor, Bomber, Dreadnought }
+    enum EnemyType { Fighter, Interceptor, Bomber, Phantom, Dreadnought }
     enum MissionType { Assault, HoldTheLine, BossHunt }
     enum PowerUpType { Shield, RapidFire, SpreadShot, ScoreBoost }
     enum WeaponMode { Standard, Twin, Spread }
@@ -78,6 +78,16 @@ public class Game1 : Game
         public int Size;
     }
     private List<Star> _stars = new List<Star>();
+
+    struct Asteroid
+    {
+        public Vector2 Position;
+        public Vector2 Velocity;
+        public float Radius;
+        public float Rotation;
+        public float RotationSpeed;
+    }
+    private List<Asteroid> _asteroids = new List<Asteroid>();
 
     struct Explosion
     {
@@ -413,6 +423,7 @@ public class Game1 : Game
         _enemyProjectiles.Clear();
         _explosions.Clear();
         _powerUps.Clear();
+        _asteroids.Clear();
         _screenShakeTimer = 0f;
         _cameraOffset = Vector2.Zero;
         _missionEnding = false;
@@ -432,6 +443,17 @@ public class Game1 : Game
 
         int enemyCount = Math.Max(6, 10 + (_missionsCompleted * 4) + _rng.Next(0, 8) + _nextMissionEnemyModifier);
         _nextMissionEnemyModifier = 0;
+
+        for (int i = 0; i < _missionsCompleted + 2; i++)
+        {
+            _asteroids.Add(new Asteroid {
+                Position = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(-1000, -100)),
+                Velocity = new Vector2((float)(_rng.NextDouble() * 40 - 20), (float)(_rng.NextDouble() * 100 + 50)),
+                Radius = (float)(_rng.NextDouble() * 20 + 15),
+                Rotation = (float)(_rng.NextDouble() * MathHelper.TwoPi),
+                RotationSpeed = (float)(_rng.NextDouble() * 2 - 1)
+            });
+        }
 
         if (_currentMissionType == MissionType.BossHunt)
         {
@@ -464,7 +486,7 @@ public class Game1 : Game
             for (int i = 0; i < enemyCount; i++)
             {
                 var roll = _rng.NextDouble();
-                var type = roll < 0.5 ? EnemyType.Fighter : roll < 0.8 ? EnemyType.Interceptor : EnemyType.Bomber;
+                var type = roll < 0.4 ? EnemyType.Fighter : roll < 0.65 ? EnemyType.Interceptor : roll < 0.85 ? EnemyType.Bomber : EnemyType.Phantom;
                 AddEnemyWaveUnit(type, false);
             }
         }
@@ -479,6 +501,7 @@ public class Game1 : Game
         {
             EnemyType.Interceptor => 26,
             EnemyType.Bomber => 42,
+            EnemyType.Phantom => 15,
             _ => 20
         };
 
@@ -486,6 +509,7 @@ public class Game1 : Game
         {
             EnemyType.Interceptor => 1.0f,
             EnemyType.Bomber => 0.8f,
+            EnemyType.Phantom => 2.0f,
             _ => 1.35f
         };
 
@@ -642,10 +666,12 @@ public class Game1 : Game
                 Exit();
         }
 
+        float scrollSpeedMultiplier = _currentState == GameState.TacticalMission ? (_currentMissionType == MissionType.HoldTheLine ? 2.5f : 1.5f) : 1f;
+
         for (int i = 0; i < _stars.Count; i++)
         {
             var star = _stars[i];
-            star.Position.Y += star.Speed * 3f * (float)gameTime.ElapsedGameTime.TotalSeconds;
+            star.Position.Y += star.Speed * 3f * scrollSpeedMultiplier * (float)gameTime.ElapsedGameTime.TotalSeconds;
             if (star.Position.Y > GraphicsDevice.Viewport.Height)
             {
                 star.Position.Y = 0;
@@ -657,7 +683,7 @@ public class Game1 : Game
         for (int i = 0; i < _nebulae.Count; i++)
         {
             var neb = _nebulae[i];
-            neb.Position.Y += neb.Speed * (float)gameTime.ElapsedGameTime.TotalSeconds;
+            neb.Position.Y += neb.Speed * scrollSpeedMultiplier * (float)gameTime.ElapsedGameTime.TotalSeconds;
             neb.Rotation += neb.RotationSpeed * (float)gameTime.ElapsedGameTime.TotalSeconds;
             if (neb.Position.Y > GraphicsDevice.Viewport.Height + 400)
             {
@@ -670,7 +696,7 @@ public class Game1 : Game
         for (int i = 0; i < _planets.Count; i++)
         {
             var planet = _planets[i];
-            planet.Position.Y += planet.Speed * (float)gameTime.ElapsedGameTime.TotalSeconds;
+            planet.Position.Y += planet.Speed * scrollSpeedMultiplier * (float)gameTime.ElapsedGameTime.TotalSeconds;
             planet.Rotation += planet.RotationSpeed * (float)gameTime.ElapsedGameTime.TotalSeconds;
             if (planet.Position.Y > GraphicsDevice.Viewport.Height + 200)
             {
@@ -687,6 +713,14 @@ public class Game1 : Game
             {
                 StartMission();
                 _currentState = GameState.TacticalMission;
+            }
+            if (kb.IsKeyDown(Keys.U) && !_previousKeyboardState.IsKeyDown(Keys.U))
+            {
+                if (_score >= 1000 && (int)_playerShip < 6)
+                {
+                    _score -= 1000;
+                    _playerShip++;
+                }
             }
         }
         else if (_currentState == GameState.TacticalMission)
@@ -715,6 +749,42 @@ public class Game1 : Game
                 _playerPos.Y = MathHelper.Clamp(_playerPos.Y, 30, GraphicsDevice.Viewport.Height - 30);
 
                 FirePlayerShots(dt);
+
+                // Passive Shield Regen
+                if (_playerInvincibleTimer <= 0f && _playerFireCooldown <= 0f && _playerShields < stats.MaxShields)
+                {
+                    _playerShields = Math.Min(stats.MaxShields, _playerShields + (int)Math.Max(1f, 15f * dt));
+                }
+            }
+
+            for (int i = _asteroids.Count - 1; i >= 0; i--)
+            {
+                var ast = _asteroids[i];
+                ast.Position += ast.Velocity * dt;
+                ast.Rotation += ast.RotationSpeed * dt;
+
+                if (ast.Position.Y > GraphicsDevice.Viewport.Height + 50)
+                {
+                    ast.Position.Y = -50;
+                    ast.Position.X = _rng.Next(0, GraphicsDevice.Viewport.Width);
+                }
+
+                Rectangle astBox = new Rectangle((int)(ast.Position.X - ast.Radius), (int)(ast.Position.Y - ast.Radius), (int)(ast.Radius * 2), (int)(ast.Radius * 2));
+
+                if (_playerShields > 0 && _playerInvincibleTimer <= 0f && astBox.Intersects(GetPlayerBounds()))
+                {
+                    int dmg = 25;
+                    _playerShields -= dmg;
+                    _missionDamageTaken += dmg;
+                    _playerInvincibleTimer = 0.6f;
+                    _screenShakeTimer = 0.2f;
+                    _screenShakeMagnitude = 6f;
+                    _explosions.Add(new Explosion { Position = ast.Position, Timer = 0f, Duration = 0.5f, MaxRadius = 60f });
+                    _asteroids.RemoveAt(i);
+                    continue;
+                }
+
+                _asteroids[i] = ast;
             }
 
             for (int i = _torpedoes.Count - 1; i >= 0; i--)
@@ -722,6 +792,21 @@ public class Game1 : Game
                 _torpedoes[i].Position += _torpedoes[i].Velocity * dt;
                 if (_torpedoes[i].Position.Y < -50 || _torpedoes[i].Position.Y > GraphicsDevice.Viewport.Height + 50 || _torpedoes[i].Position.X < -50 || _torpedoes[i].Position.X > GraphicsDevice.Viewport.Width + 50)
                 {
+                    _torpedoes.RemoveAt(i);
+                    continue;
+                }
+
+                bool hitAst = false;
+                for (int a = 0; a < _asteroids.Count; a++)
+                {
+                    if (Vector2.Distance(_asteroids[a].Position, _torpedoes[i].Position) < _asteroids[a].Radius + _torpedoes[i].Radius)
+                    {
+                        hitAst = true;
+                        break;
+                    }
+                }
+                if (hitAst) {
+                    _explosions.Add(new Explosion { Position = _torpedoes[i].Position, Timer = 0f, Duration = 0.2f, MaxRadius = 20f });
                     _torpedoes.RemoveAt(i);
                 }
             }
@@ -800,10 +885,10 @@ public class Game1 : Game
                 };
 
                 enemy.Phase += dt * (enemy.IsBoss ? 2.5f : 3.5f);
-                if (enemy.Type == EnemyType.Fighter)
+                if (enemy.Type == EnemyType.Fighter || enemy.Type == EnemyType.Phantom)
                 {
                     enemy.Position.Y += enemySpeed * dt;
-                    enemy.Position.X += (float)Math.Sin(enemy.Phase) * 55f * dt;
+                    enemy.Position.X += (float)Math.Sin(enemy.Phase) * (enemy.Type == EnemyType.Phantom ? 85f : 55f) * dt;
                 }
                 else if (enemy.Type == EnemyType.Interceptor)
                 {
@@ -997,8 +1082,6 @@ public class Game1 : Game
 
                         _dominionStrength -= 15;
                         _missionsCompleted++;
-                        if (_missionsCompleted % 2 == 0 && (int)_playerShip < 6)
-                            _playerShip++;
 
                         if (_dominionStrength <= 0)
                         {
@@ -1157,6 +1240,14 @@ public class Game1 : Game
             {
                 DrawText("ARMORY UPGRADE READY", 490, GraphicsDevice.Viewport.Height - 52, Color.Yellow, 3);
             }
+
+            DrawText("SCORE", 20, 20, Color.White, 3);
+            DrawNumber(_score, 110, 15, Color.Yellow, 4);
+
+            if ((int)_playerShip < 6)
+            {
+                DrawText("PRESS U TO UPGRADE SHIP 1000 SCORE", 490, GraphicsDevice.Viewport.Height - 92, _score >= 1000 ? Color.Cyan : Color.Gray, 2);
+            }
         }
         else if (_currentState == GameState.TacticalMission)
         {
@@ -1281,9 +1372,23 @@ public class Game1 : Game
                 _spriteBatch.Draw(_particleTexture, new Rectangle((int)exp.Position.X - coreSize / 2, (int)exp.Position.Y - coreSize / 2, coreSize, coreSize), coreColor);
             }
 
+            // Draw Asteroids
+            foreach (var ast in _asteroids)
+            {
+                // We'll reuse the procedural planet texture and tint it gray
+                _spriteBatch.Draw(_planetTexture, ast.Position, null, Color.DarkGray, ast.Rotation, new Vector2(32, 32), ast.Radius / 32f, SpriteEffects.None, 0f);
+            }
+
             // Draw Enemies (JemHadar/Breen/Cardassian represented as pink/purple boxes)
             foreach(var enemy in _enemies)
             {
+                float alpha = 1f;
+                if (enemy.Type == EnemyType.Phantom)
+                {
+                    // Decloak when about to fire
+                    alpha = enemy.FireTimer < 0.4f ? 1f : 0.15f;
+                }
+
                 // Health bar
                 int barW = enemy.IsBoss ? 90 : 40;
                 int barH = 4;
@@ -1291,8 +1396,8 @@ public class Game1 : Game
                 int barY = (int)enemy.Position.Y + (enemy.IsBoss ? 72 : 24);
                 float hpPct = Math.Max(0f, (float)enemy.Health / enemy.MaxHealth);
                 Color hpColor = hpPct > 0.5f ? Color.LimeGreen : hpPct > 0.25f ? Color.Yellow : Color.Red;
-                _spriteBatch.Draw(_pixel, new Rectangle(barX, barY, barW, barH), Color.DarkGray * 0.7f);
-                _spriteBatch.Draw(_pixel, new Rectangle(barX, barY, (int)(hpPct * barW), barH), hpColor);
+                _spriteBatch.Draw(_pixel, new Rectangle(barX, barY, barW, barH), Color.DarkGray * 0.7f * alpha);
+                _spriteBatch.Draw(_pixel, new Rectangle(barX, barY, (int)(hpPct * barW), barH), hpColor * alpha);
 
                 // Boss phase 2 glow
                 if (enemy.IsBoss && _bossPhaseTwo)
@@ -1321,11 +1426,13 @@ public class Game1 : Game
                         float scale = 64f / Math.Max(_jemHadarFighterTexture.Width, _jemHadarFighterTexture.Height);
                         int w = (int)(_jemHadarFighterTexture.Width * scale);
                         int h = (int)(_jemHadarFighterTexture.Height * scale);
-                        _spriteBatch.Draw(_jemHadarFighterTexture, new Rectangle((int)enemy.Position.X - w / 2, (int)enemy.Position.Y - h / 2, w, h), Color.White);
+                        Color tint = enemy.Type == EnemyType.Phantom ? Color.LightBlue : Color.White;
+                        _spriteBatch.Draw(_jemHadarFighterTexture, new Rectangle((int)enemy.Position.X - w / 2, (int)enemy.Position.Y - h / 2, w, h), tint * alpha);
                     }
                     else
                     {
-                        _spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - 15, (int)enemy.Position.Y - 15, 30, 30), Color.Magenta);
+                        Color fallback = enemy.Type == EnemyType.Phantom ? Color.Cyan : Color.Magenta;
+                        _spriteBatch.Draw(_pixel, new Rectangle((int)enemy.Position.X - 15, (int)enemy.Position.Y - 15, 30, 30), fallback * alpha);
                     }
                 }
             }
