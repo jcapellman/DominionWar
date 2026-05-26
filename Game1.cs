@@ -20,6 +20,7 @@ public class Game1 : Game
     private Texture2D _jemHadarBattleshipTexture;
     private Texture2D _constitutionTexture;
     private Texture2D _excelsiorTexture;
+    private Texture2D _federationTorpedoTexture;
 
     // Strategic View Textures
     private Texture2D _strategicBackground;
@@ -174,6 +175,10 @@ public class Game1 : Game
     private float _phaserDuration = 0f;
     private float _phaserCooldown = 0f;
     private Enemy? _phaserTarget;
+
+    // Planet textures
+    private List<Texture2D> _planetTextures = new List<Texture2D>();
+    private int _planetTextureIndex = 0;
 
     private readonly int[,,] _font = new int[10, 5, 3] {
         { {1,1,1}, {1,0,1}, {1,0,1}, {1,0,1}, {1,1,1} },
@@ -376,30 +381,47 @@ public class Game1 : Game
         }
         _particleTexture.SetData(pData);
 
-        // Procedural Planet Texture
-        _planetTexture = new Texture2D(GraphicsDevice, 64, 64);
-        Color[] pData2 = new Color[64 * 64];
-        Vector2 pCenter = new Vector2(32, 32);
-        for(int y = 0; y < 64; y++) {
-            for(int x = 0; x < 64; x++) {
-                float dist = Vector2.Distance(pCenter, new Vector2(x, y));
-                if (dist <= 31.5f) {
-                    float nx = (x - 32) / 32f;
-                    float ny = -(y - 32) / 32f;
-                    float nz = (float)Math.Sqrt(Math.Max(0, 1 - nx*nx - ny*ny));
-                    Vector3 normal = new Vector3(nx, ny, nz);
-                    Vector3 lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
-                    float diffuse = MathHelper.Clamp(Vector3.Dot(normal, lightDir), 0f, 1f);
-                    float intensity = MathHelper.Clamp(diffuse + 0.2f, 0f, 1f);
-                    pData2[y * 64 + x] = new Color(intensity, intensity, intensity, 1f);
-                } else {
-                    pData2[y * 64 + x] = Color.Transparent;
-                }
+        _asteroidTexture = GenerateAsteroidTexture(64, 64);
+
+        // Load planet textures from files, with fallback to procedurally generated
+        string[] planetNames = { "Terran", "Desert", "Ice", "Volcanic", "Toxic", "Methane" };
+        for (int i = 0; i < planetNames.Length; i++)
+        {
+            string planetPath = $"Assets/Planets/{planetNames[i]}.png";
+            Texture2D? loadedPlanet = null;
+
+            try
+            {
+                loadedPlanet = Texture2D.FromFile(GraphicsDevice, planetPath);
+            }
+            catch
+            {
+                // Texture not found, will use procedural fallback
+            }
+
+            // Use loaded texture or fall back to procedural generation
+            if (loadedPlanet != null)
+            {
+                _planetTextures.Add(loadedPlanet);
+            }
+            else
+            {
+                // Procedural fallback
+                _planetTextures.Add(planetNames[i] switch
+                {
+                    "Terran" => GeneratePlanetTexture_Terran(64, 64),
+                    "Desert" => GeneratePlanetTexture_Desert(64, 64),
+                    "Ice" => GeneratePlanetTexture_Ice(64, 64),
+                    "Volcanic" => GeneratePlanetTexture_Volcanic(64, 64),
+                    "Toxic" => GeneratePlanetTexture_Toxic(64, 64),
+                    "Methane" => GeneratePlanetTexture_Methane(64, 64),
+                    _ => GeneratePlanetTexture_Terran(64, 64)
+                });
             }
         }
-        _planetTexture.SetData(pData2);
 
-        _asteroidTexture = GenerateAsteroidTexture(64, 64);
+        // Set default for backward compatibility
+        _planetTexture = _planetTextures[0];
 
         // Populate Nebulae and Planets
         for (int i = 0; i < 15; i++)
@@ -416,10 +438,11 @@ public class Game1 : Game
 
         for (int i = 0; i < 3; i++)
         {
+            var planetTexture = _planetTextures[_rng.Next(_planetTextures.Count)];
             _planets.Add(new BackgroundElement {
                 Position = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(-ScreenHeight, ScreenHeight + 200)),
                 Speed = (float)(_rng.NextDouble() * 20 + 10),
-                Color = new Color((float)_rng.NextDouble()*0.6f+0.4f, (float)_rng.NextDouble()*0.6f+0.4f, (float)_rng.NextDouble()*0.6f+0.4f),
+                Color = Color.White,
                 Scale = (float)(_rng.NextDouble() * 1.5f + 0.5f),
                 Rotation = (float)(_rng.NextDouble() * Math.PI * 2),
                 RotationSpeed = (float)(_rng.NextDouble() * 0.1 - 0.05)
@@ -431,6 +454,7 @@ public class Game1 : Game
         try { _excelsiorTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Excelsior.png"); } catch { }
         try { _jemHadarFighterTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Vanguard.png"); } catch { }
         try { _jemHadarBattleshipTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/JemHadar_Battleship.png"); } catch { }
+        try { _federationTorpedoTexture = Texture2D.FromFile(GraphicsDevice, "Assets/Sfx/Federation_Torpedo.png"); } catch { }
 
         try { _strategicBackground = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Background_Strategic.png"); } catch { }
         try { _federationLogo = Texture2D.FromFile(GraphicsDevice, "Assets/Ships/Faction_Federation_Logo.png"); } catch { }
@@ -508,6 +532,315 @@ public class Game1 : Game
 
         texture.SetData(data);
         return texture;
+    }
+
+    private Texture2D GeneratePlanetTexture_Terran(int width, int height)
+    {
+        var texture = new Texture2D(GraphicsDevice, width, height);
+        var data = new Color[width * height];
+        var center = new Vector2(width / 2f, height / 2f);
+        var rng = new Random(123);
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float dist = Vector2.Distance(center, new Vector2(x, y));
+                if (dist <= 31.5f)
+                {
+                    float nx = (x - 32) / 32f;
+                    float ny = -(y - 32) / 32f;
+                    float nz = (float)Math.Sqrt(Math.Max(0, 1 - nx*nx - ny*ny));
+                    Vector3 normal = new Vector3(nx, ny, nz);
+                    Vector3 lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
+                    float diffuse = MathHelper.Clamp(Vector3.Dot(normal, lightDir), 0f, 1f);
+
+                    // Terrain pattern: mix of blue (water) and green (land)
+                    float noise = (float)Math.Sin(x * 0.2f) * (float)Math.Cos(y * 0.15f);
+                    float waterChance = 0.6f + noise * 0.2f;
+
+                    Color baseColor = (float)rng.NextDouble() < waterChance 
+                        ? new Color(0.4f, 0.7f, 1.0f)      // Water - bright blue
+                        : new Color(0.3f, 0.8f, 0.4f);     // Land - bright green
+
+                    float intensity = MathHelper.Clamp(diffuse + 0.5f, 0.4f, 1f);
+                    data[y * width + x] = baseColor * intensity;
+                }
+                else
+                {
+                    data[y * width + x] = Color.Transparent;
+                }
+            }
+        }
+
+        texture.SetData(data);
+        return texture;
+    }
+
+    private Texture2D GeneratePlanetTexture_Desert(int width, int height)
+    {
+        var texture = new Texture2D(GraphicsDevice, width, height);
+        var data = new Color[width * height];
+        var center = new Vector2(width / 2f, height / 2f);
+        var rng = new Random(456);
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float dist = Vector2.Distance(center, new Vector2(x, y));
+                if (dist <= 31.5f)
+                {
+                    float nx = (x - 32) / 32f;
+                    float ny = -(y - 32) / 32f;
+                    float nz = (float)Math.Sqrt(Math.Max(0, 1 - nx*nx - ny*ny));
+                    Vector3 normal = new Vector3(nx, ny, nz);
+                    Vector3 lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
+                    float diffuse = MathHelper.Clamp(Vector3.Dot(normal, lightDir), 0f, 1f);
+
+                    // Sand dunes and rocky formations
+                    float dune = (float)Math.Sin(x * 0.15f + y * 0.1f) * 0.5f + 0.5f;
+                    Color baseColor = Color.Lerp(
+                        new Color(0.8f, 0.65f, 0.3f),     // Sand
+                        new Color(0.7f, 0.55f, 0.35f),    // Rocky
+                        dune
+                    );
+
+                    float intensity = MathHelper.Clamp(diffuse + 0.25f, 0f, 1f);
+                    data[y * width + x] = baseColor * intensity;
+                }
+                else
+                {
+                    data[y * width + x] = Color.Transparent;
+                }
+            }
+        }
+
+        texture.SetData(data);
+        return texture;
+    }
+
+    private Texture2D GeneratePlanetTexture_Ice(int width, int height)
+    {
+        var texture = new Texture2D(GraphicsDevice, width, height);
+        var data = new Color[width * height];
+        var center = new Vector2(width / 2f, height / 2f);
+        var rng = new Random(789);
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float dist = Vector2.Distance(center, new Vector2(x, y));
+                if (dist <= 31.5f)
+                {
+                    float nx = (x - 32) / 32f;
+                    float ny = -(y - 32) / 32f;
+                    float nz = (float)Math.Sqrt(Math.Max(0, 1 - nx*nx - ny*ny));
+                    Vector3 normal = new Vector3(nx, ny, nz);
+                    Vector3 lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
+                    float diffuse = MathHelper.Clamp(Vector3.Dot(normal, lightDir), 0f, 1f);
+
+                    // Icy cracks and frozen formations
+                    float cracks = (float)Math.Abs(Math.Sin(x * 0.3f) * Math.Cos(y * 0.25f));
+                    Color baseColor = Color.Lerp(
+                        new Color(1.0f, 1.0f, 1.0f),      // Pure white ice
+                        new Color(0.8f, 0.90f, 1.0f),     // Icy blue
+                        cracks
+                    );
+
+                    float intensity = MathHelper.Clamp(diffuse + 0.5f, 0.5f, 1f);
+                    data[y * width + x] = baseColor * intensity;
+                }
+                else
+                {
+                    data[y * width + x] = Color.Transparent;
+                }
+            }
+        }
+
+        texture.SetData(data);
+        return texture;
+    }
+
+    private Texture2D GeneratePlanetTexture_Volcanic(int width, int height)
+    {
+        var texture = new Texture2D(GraphicsDevice, width, height);
+        var data = new Color[width * height];
+        var center = new Vector2(width / 2f, height / 2f);
+        var rng = new Random(321);
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float dist = Vector2.Distance(center, new Vector2(x, y));
+                if (dist <= 31.5f)
+                {
+                    float nx = (x - 32) / 32f;
+                    float ny = -(y - 32) / 32f;
+                    float nz = (float)Math.Sqrt(Math.Max(0, 1 - nx*nx - ny*ny));
+                    Vector3 normal = new Vector3(nx, ny, nz);
+                    Vector3 lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
+                    float diffuse = MathHelper.Clamp(Vector3.Dot(normal, lightDir), 0f, 1f);
+
+                    // Lava flows and black rock
+                    float lava = (float)Math.Sin(x * 0.2f + y * 0.2f) * 0.5f + 0.5f;
+                    Color baseColor = Color.Lerp(
+                        new Color(0.4f, 0.2f, 0.1f),      // Dark volcanic rock
+                        new Color(1.0f, 0.4f, 0.1f),      // Bright lava
+                        lava * 0.6f
+                    );
+
+                    float intensity = MathHelper.Clamp(diffuse + 0.5f, 0.4f, 1f);
+                    data[y * width + x] = baseColor * intensity;
+                }
+                else
+                {
+                    data[y * width + x] = Color.Transparent;
+                }
+            }
+        }
+
+        texture.SetData(data);
+        return texture;
+    }
+
+    private Texture2D GeneratePlanetTexture_Toxic(int width, int height)
+    {
+        var texture = new Texture2D(GraphicsDevice, width, height);
+        var data = new Color[width * height];
+        var center = new Vector2(width / 2f, height / 2f);
+        var rng = new Random(654);
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float dist = Vector2.Distance(center, new Vector2(x, y));
+                if (dist <= 31.5f)
+                {
+                    float nx = (x - 32) / 32f;
+                    float ny = -(y - 32) / 32f;
+                    float nz = (float)Math.Sqrt(Math.Max(0, 1 - nx*nx - ny*ny));
+                    Vector3 normal = new Vector3(nx, ny, nz);
+                    Vector3 lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
+                    float diffuse = MathHelper.Clamp(Vector3.Dot(normal, lightDir), 0f, 1f);
+
+                    // Toxic swirls - yellow and sickly green
+                    float swirl = (float)Math.Sin(x * 0.25f) * (float)Math.Cos(y * 0.2f) * 0.5f + 0.5f;
+                    Color baseColor = Color.Lerp(
+                        new Color(1.0f, 0.95f, 0.2f),     // Bright toxic yellow
+                        new Color(0.4f, 0.95f, 0.2f),     // Bright toxic green
+                        swirl
+                    );
+
+                    float intensity = MathHelper.Clamp(diffuse + 0.5f, 0.4f, 1f);
+                    data[y * width + x] = baseColor * intensity;
+                }
+                else
+                {
+                    data[y * width + x] = Color.Transparent;
+                }
+            }
+        }
+
+        texture.SetData(data);
+        return texture;
+    }
+
+    private Texture2D GeneratePlanetTexture_Methane(int width, int height)
+    {
+        var texture = new Texture2D(GraphicsDevice, width, height);
+        var data = new Color[width * height];
+        var center = new Vector2(width / 2f, height / 2f);
+        var rng = new Random(987);
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                float dist = Vector2.Distance(center, new Vector2(x, y));
+                if (dist <= 31.5f)
+                {
+                    float nx = (x - 32) / 32f;
+                    float ny = -(y - 32) / 32f;
+                    float nz = (float)Math.Sqrt(Math.Max(0, 1 - nx*nx - ny*ny));
+                    Vector3 normal = new Vector3(nx, ny, nz);
+                    Vector3 lightDir = Vector3.Normalize(new Vector3(-1f, 1f, 1f));
+                    float diffuse = MathHelper.Clamp(Vector3.Dot(normal, lightDir), 0f, 1f);
+
+                    // Gas giant with banding
+                    float band = (float)Math.Sin(y * 0.35f) * 0.5f + 0.5f;
+                    Color baseColor = Color.Lerp(
+                        new Color(0.6f, 0.75f, 1.0f),     // Light cyan
+                        new Color(0.4f, 0.65f, 0.95f),    // Deeper blue
+                        band
+                    );
+
+                    // Add some swirl patterns
+                    float swirl = (float)Math.Sin(x * 0.1f + y * 0.15f) * 0.3f;
+                    baseColor = Color.Lerp(baseColor, new Color(0.7f, 0.95f, 1.0f), swirl);
+
+                    float intensity = MathHelper.Clamp(diffuse + 0.5f, 0.4f, 1f);
+                    data[y * width + x] = baseColor * intensity;
+                }
+                else
+                {
+                    data[y * width + x] = Color.Transparent;
+                }
+            }
+        }
+
+        texture.SetData(data);
+        return texture;
+    }
+
+    private void DrawGlowCircle(Vector2 center, float radius, Color color)
+    {
+        // Draw a soft glow circle using many small pixels with denser coverage
+        int segments = Math.Max(24, (int)(radius * 1.2f));
+        for (int i = 0; i < segments; i++)
+        {
+            float angle = (float)(i / (float)segments * Math.PI * 2);
+            Vector2 p = center + new Vector2((float)Math.Cos(angle) * radius, (float)Math.Sin(angle) * radius);
+
+            // Draw 3x3 pixel block for better visibility
+            _spriteBatch.Draw(_pixel, new Rectangle((int)p.X - 1, (int)p.Y - 1, 3, 3), color);
+        }
+    }
+
+    private void DrawPlanetClouds(BackgroundElement planet, int planetIndex, GameTime gameTime)
+    {
+        // Draw slow-moving cloud layers for atmospheric planets
+        // Clouds rotate slower than the planet itself
+        float cloudRotation = planet.Rotation * 0.3f + (float)gameTime.TotalGameTime.TotalSeconds * 0.25f;
+
+        // Cloud layer opacity and color varies by planet type - much more visible
+        int textureType = planetIndex % _planetTextures.Count;
+        Color cloudColor = textureType switch
+        {
+            0 => new Color(1f, 1f, 1f, 1.0f),           // Terran - white wispy clouds (fully opaque)
+            1 => new Color(0.95f, 0.8f, 0.6f, 0.95f),   // Desert - dust storms (very visible)
+            2 => new Color(1f, 1f, 1f, 1.0f),           // Ice - ice crystals (fully opaque)
+            3 => new Color(1f, 0.5f, 0.3f, 0.9f),       // Volcanic - ash clouds (very visible)
+            4 => new Color(0.95f, 1f, 0.3f, 1.0f),      // Toxic - chemical clouds (fully opaque)
+            5 => new Color(0.8f, 0.95f, 1f, 0.95f),     // Methane - thick atmosphere (very visible)
+            _ => new Color(1f, 1f, 1f, 1.0f)
+        };
+
+        // Draw multiple cloud layers at different speeds with pulsing effect
+        for (int layer = 0; layer < 3; layer++)
+        {
+            float layerRotation = cloudRotation + (layer * 0.4f);
+            float layerScale = planet.Scale + (layer * 0.4f);
+
+            // Add pulsing to cloud layers
+            float pulse = 0.7f + 0.3f * (float)Math.Sin(gameTime.TotalGameTime.TotalSeconds * 1.2f + layer);
+            Color layerColor = cloudColor * (1.0f - layer * 0.1f) * pulse;
+
+            _spriteBatch.Draw(_particleTexture, planet.Position, null, layerColor, layerRotation, new Vector2(16, 16), layerScale, SpriteEffects.None, 0f);
+        }
     }
 
     private void AddAsteroid(Vector2 position, Vector2 velocity, float radius)
@@ -927,7 +1260,6 @@ public class Game1 : Game
             {
                 planet.Position.Y = -200;
                 planet.Position.X = _rng.Next(-100, ScreenWidth + 100);
-                planet.Color = new Color((float)_rng.NextDouble()*0.6f+0.4f, (float)_rng.NextDouble()*0.6f+0.4f, (float)_rng.NextDouble()*0.6f+0.4f);
             }
             _planets[i] = planet;
         }
@@ -1693,8 +2025,46 @@ public class Game1 : Game
                 _spriteBatch.Draw(_particleTexture, neb.Position, null, neb.Color, neb.Rotation, new Vector2(16, 16), neb.Scale, SpriteEffects.None, 0f);
 
             // Draw Background: Planets
-            foreach (var planet in _planets)
-                _spriteBatch.Draw(_planetTexture, planet.Position, null, planet.Color, planet.Rotation, new Vector2(32, 32), planet.Scale, SpriteEffects.None, 0f);
+            for (int i = 0; i < _planets.Count; i++)
+            {
+                var planet = _planets[i];
+                int planetTextureIndex = i % _planetTextures.Count;
+                var planetTexture = _planetTextures[planetTextureIndex];
+
+                // Draw planet glow - soft halo effect with multiple layers
+                float glowPulse = 0.7f + 0.3f * (float)Math.Sin(gameTime.TotalGameTime.TotalSeconds * 1.5f + i);
+                Color glowColor = planetTextureIndex switch
+                {
+                    0 => Color.CornflowerBlue,             // Terran - blue/cyan
+                    1 => Color.OrangeRed,                  // Desert - orange/red
+                    2 => Color.Cyan,                       // Ice - cyan/white
+                    3 => Color.OrangeRed,                  // Volcanic - red/orange
+                    4 => Color.Yellow,                     // Toxic - yellow
+                    5 => Color.CornflowerBlue,             // Methane - cyan/blue
+                    _ => Color.White
+                };
+
+                // Draw multiple concentric glow rings - more visible
+                float baseGlowRadius = planet.Scale * 48f;
+                for (int glowRing = 4; glowRing >= 0; glowRing--)
+                {
+                    float ringRadius = baseGlowRadius + (glowRing * 6f);
+                    float ringOpacity = (0.4f - (glowRing * 0.08f)) * glowPulse;
+
+                    // Draw a pixel circle at this radius
+                    if (ringRadius > 0)
+                    {
+                        Color ringColor = glowColor * ringOpacity;
+                        DrawGlowCircle(planet.Position, ringRadius, ringColor);
+                    }
+                }
+
+                // Draw planet
+                _spriteBatch.Draw(planetTexture, planet.Position, null, Color.White, planet.Rotation, new Vector2(32, 32), planet.Scale, SpriteEffects.None, 0f);
+
+                // Draw cloud layers for atmospheric planets
+                DrawPlanetClouds(planet, i, gameTime);
+            }
 
             // Draw Stars
             foreach (var star in _stars)
@@ -1807,10 +2177,37 @@ public class Game1 : Game
             // Draw Torpedoes (Photon Torpedoes) - Player fire
             foreach(var torp in _torpedoes)
             {
-                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.Position.X - 4, (int)torp.Position.Y - 5, 8, 10), Color.OrangeRed);
-                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.Position.X - 2, (int)torp.Position.Y - 3, 4, 6), Color.LightYellow);
-                // Add glow trail
-                _spriteBatch.Draw(_particleTexture, torp.Position, null, Color.OrangeRed * 0.3f, 0f, new Vector2(16, 16), 0.6f, SpriteEffects.None, 0f);
+                if (_federationTorpedoTexture != null)
+                {
+                    // Draw using texture - much larger
+                    float scale = 24f / Math.Max(_federationTorpedoTexture.Width, _federationTorpedoTexture.Height);
+
+                    // Calculate angle based on velocity (pointing in direction of travel)
+                    float angle = (float)Math.Atan2(torp.Velocity.Y, torp.Velocity.X) + MathHelper.PiOver2;
+
+                    _spriteBatch.Draw(_federationTorpedoTexture, torp.Position, null, Color.White, angle, 
+                        new Vector2(_federationTorpedoTexture.Width / 2f, _federationTorpedoTexture.Height / 2f), 
+                        scale, SpriteEffects.None, 0f);
+
+                    // Add glow trail
+                    _spriteBatch.Draw(_particleTexture, torp.Position, null, Color.OrangeRed * 0.4f, 0f, new Vector2(16, 16), 1.0f, SpriteEffects.None, 0f);
+                }
+                else
+                {
+                    // Fallback to larger pixel representation
+                    float angle = (float)Math.Atan2(torp.Velocity.Y, torp.Velocity.X);
+                    int size = 16;
+
+                    // Draw rotated rectangle approximation
+                    Vector2 forward = new Vector2((float)Math.Cos(angle), (float)Math.Sin(angle)) * (size / 2f);
+                    Vector2 right = new Vector2(-(float)Math.Sin(angle), (float)Math.Cos(angle)) * 4f;
+
+                    _spriteBatch.Draw(_pixel, new Rectangle((int)(torp.Position.X - forward.X), (int)(torp.Position.Y - forward.Y), (int)(size * 0.7f), 8), Color.OrangeRed);
+                    _spriteBatch.Draw(_pixel, new Rectangle((int)(torp.Position.X - forward.X + 2), (int)(torp.Position.Y - forward.Y + 2), (int)(size * 0.5f), 4), Color.LightYellow);
+
+                    // Add glow trail
+                    _spriteBatch.Draw(_particleTexture, torp.Position, null, Color.OrangeRed * 0.4f, 0f, new Vector2(16, 16), 0.8f, SpriteEffects.None, 0f);
+                }
             }
 
             // Draw Enemy Projectiles (Dominion Polaron Beams)
