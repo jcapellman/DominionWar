@@ -149,6 +149,8 @@ public class Game1 : Game
     private bool _missionEnding = false;
     private float _missionEndTimer = 0f;
     private bool _missionWon = false;
+    private float _playerInvincibleTimer = 0f;
+    private bool _bossPhaseTwo = false;
 
     // Camera/Effects
     private Vector2 _cameraOffset = Vector2.Zero;
@@ -425,6 +427,8 @@ public class Game1 : Game
         _comboMultiplier = 1;
         _missionWeaponBonus = _nextMissionWeaponBonus;
         _nextMissionWeaponBonus = WeaponMode.Standard;
+        _playerInvincibleTimer = 0f;
+        _bossPhaseTwo = false;
 
         int enemyCount = Math.Max(6, 10 + (_missionsCompleted * 4) + _rng.Next(0, 8) + _nextMissionEnemyModifier);
         _nextMissionEnemyModifier = 0;
@@ -628,8 +632,15 @@ public class Game1 : Game
             ToggleFullscreen();
         }
 
-        if (GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed || (kb.IsKeyDown(Keys.Escape) && !_previousKeyboardState.IsKeyDown(Keys.Escape)))
+        if (GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed)
             Exit();
+        if (kb.IsKeyDown(Keys.Escape) && !_previousKeyboardState.IsKeyDown(Keys.Escape))
+        {
+            if (_currentState == GameState.TacticalMission)
+                _currentState = GameState.StrategicView;
+            else
+                Exit();
+        }
 
         for (int i = 0; i < _stars.Count; i++)
         {
@@ -688,6 +699,11 @@ public class Game1 : Game
                 _rapidFireTimer -= dt;
             }
 
+            if (_playerInvincibleTimer > 0f)
+            {
+                _playerInvincibleTimer -= dt;
+            }
+
             if (_playerShields > 0)
             {
                 if (kb.IsKeyDown(Keys.W)) _playerPos.Y -= stats.Speed * dt;
@@ -717,11 +733,12 @@ public class Game1 : Game
                 {
                     _enemyProjectiles.RemoveAt(i);
                 }
-                else if (_playerShields > 0 && GetPlayerBounds().Intersects(GetProjectileBounds(_enemyProjectiles[i])))
+                else if (_playerShields > 0 && _playerInvincibleTimer <= 0f && GetPlayerBounds().Intersects(GetProjectileBounds(_enemyProjectiles[i])))
                 {
                     int dmg = _enemyProjectiles[i].Damage;
                     _playerShields -= dmg;
                     _missionDamageTaken += dmg;
+                    _playerInvincibleTimer = 0.6f;
                     _enemyProjectiles.RemoveAt(i);
                     _screenShakeTimer = Math.Max(_screenShakeTimer, 0.15f);
                     _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 4f);
@@ -861,15 +878,26 @@ public class Game1 : Game
                     continue;
                 }
 
-                if (_playerShields > 0 && Vector2.Distance(enemy.Position, _playerPos) < (enemy.IsBoss ? 76 : enemy.Type == EnemyType.Bomber ? 46 : 38))
+                if (_playerShields > 0 && _playerInvincibleTimer <= 0f && Vector2.Distance(enemy.Position, _playerPos) < (enemy.IsBoss ? 76 : enemy.Type == EnemyType.Bomber ? 46 : 38))
                 {
                     int dmg = enemy.IsBoss ? 55 : enemy.Type == EnemyType.Bomber ? 24 : 18;
                     _playerShields -= dmg;
                     _missionDamageTaken += dmg;
+                    _playerInvincibleTimer = 0.8f;
                     _missionShipsDestroyed++;
                     _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 0.85f, MaxRadius = 240f });
                     _enemies.RemoveAt(i);
                     continue;
+                }
+
+                // Boss phase 2 trigger
+                if (enemy.IsBoss && !_bossPhaseTwo && enemy.Health < enemy.MaxHealth / 2)
+                {
+                    _bossPhaseTwo = true;
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 1.0f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 14f);
+                    _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 1.2f, MaxRadius = 600f });
+                    enemy.FireInterval = Math.Max(0.2f, enemy.FireInterval * 0.55f);
                 }
 
                 _enemies[i] = enemy;
@@ -1083,13 +1111,14 @@ public class Game1 : Game
             for (int i = 0; i < domSegments; i++)
                 _spriteBatch.Draw(_pixel, new Rectangle(domBarRight - 15 - i * 15, domBarY + 5, 11, 30), Color.OrangeRed);
 
-            // Player class marker (e.g. size reflects ship class)
+            // Player class marker
             int shipMarkerSize = 64 + (int)_playerShip * 16;
             Rectangle shipRect = new Rectangle(GraphicsDevice.Viewport.Width / 2 - shipMarkerSize / 2, midY + 40, shipMarkerSize, shipMarkerSize);
-            if (_playerShip == ShipClass.Oberth && _oberthTexture != null) _spriteBatch.Draw(_oberthTexture, shipRect, Color.White);
-            else if (_playerShip == ShipClass.Constitution && _constitutionTexture != null) _spriteBatch.Draw(_constitutionTexture, shipRect, Color.White);
-            else if (_playerShip == ShipClass.Excelsior && _excelsiorTexture != null) _spriteBatch.Draw(_excelsiorTexture, shipRect, Color.White);
-            else _spriteBatch.Draw(_pixel, shipRect, Color.White);
+            var (markerTex, _, markerTint) = GetPlayerShipVisual();
+            if (markerTex != null)
+                _spriteBatch.Draw(markerTex, shipRect, markerTint);
+            else
+                _spriteBatch.Draw(_pixel, shipRect, Color.Cyan);
 
             // Flashing Start prompt
             if ((int)(gameTime.TotalGameTime.TotalSeconds * 2) % 2 == 0)
@@ -1152,8 +1181,10 @@ public class Game1 : Game
 
             if (_comboMultiplier > 1)
             {
-                DrawText("COMBO", 20, 70, Color.Orange, 3);
-                DrawNumber(_comboMultiplier, 96, 66, Color.Orange, 4);
+                float comboPulse = 0.7f + 0.3f * (float)Math.Sin(gameTime.TotalGameTime.TotalSeconds * 10f);
+                Color comboColor = Color.Lerp(Color.Orange, Color.Yellow, comboPulse);
+                DrawText("COMBO X", 20, 70, comboColor, 3);
+                DrawNumber(_comboMultiplier, 124, 66, comboColor, 4);
             }
 
             if (_rapidFireTimer > 0f)
@@ -1164,7 +1195,11 @@ public class Game1 : Game
             DrawText("WEAPON " + GetWeaponModeLabel(GetEffectiveWeaponMode()), 20, 126, Color.LightGreen, 3);
 
             // Draw Shields
-            _spriteBatch.Draw(_pixel, new Rectangle(20, 45, Math.Max(0, _playerShields) * 2, 10), Color.Cyan);
+            var stats2 = GetShipStats(_playerShip);
+            float shieldPct = Math.Max(0f, (float)_playerShields / stats2.MaxShields);
+            Color shieldColor = shieldPct > 0.5f ? Color.Cyan : shieldPct > 0.25f ? Color.Yellow : Color.Red;
+            _spriteBatch.Draw(_pixel, new Rectangle(20, 45, 200, 10), Color.DarkGray * 0.5f);
+            _spriteBatch.Draw(_pixel, new Rectangle(20, 45, (int)(shieldPct * 200f), 10), shieldColor);
 
             for (int i = 0; i < _powerUps.Count; i++)
             {
@@ -1177,43 +1212,40 @@ public class Game1 : Game
                     _ => Color.Orange
                 };
 
+                float glowPulse = 0.6f + 0.4f * (float)Math.Sin(power.BobPhase * 2f);
+                _spriteBatch.Draw(_particleTexture, power.Position, null, powerColor * glowPulse * 0.7f, 0f, new Vector2(16, 16), 1.4f, SpriteEffects.None, 0f);
                 _spriteBatch.Draw(_pixel, new Rectangle((int)power.Position.X - 10, (int)power.Position.Y - 10, 20, 20), powerColor);
                 _spriteBatch.Draw(_pixel, new Rectangle((int)power.Position.X - 4, (int)power.Position.Y - 4, 8, 8), Color.White);
+
+                string powerLabel = power.Type switch
+                {
+                    PowerUpType.Shield => "SHD",
+                    PowerUpType.RapidFire => "RFR",
+                    PowerUpType.SpreadShot => "SPR",
+                    _ => "SCR"
+                };
+                DrawText(powerLabel, (int)power.Position.X - 18, (int)power.Position.Y + 14, powerColor, 2);
             }
 
             // Draw Player
-            if (_playerShields > 0)
+            bool drawPlayer = _playerShields > 0 && (_playerInvincibleTimer <= 0f || (int)(gameTime.TotalGameTime.TotalSeconds * 12f) % 2 == 0);
+            if (drawPlayer)
             {
-                int shipSize = 10 + (int)_playerShip * 3;
-                var playerRect = new Rectangle((int)_playerPos.X - shipSize / 2, (int)_playerPos.Y - shipSize / 2, shipSize, shipSize);
+                var (shipTex, shipRenderSize, shipBaseTint) = GetPlayerShipVisual();
+                Color shipTint = _playerInvincibleTimer > 0f ? Color.Lerp(shipBaseTint, Color.Red, 0.55f) : shipBaseTint;
 
-                if (_playerShip == ShipClass.Oberth && _oberthTexture != null)
+                if (shipTex != null)
                 {
-                    float scale = 64f / Math.Max(_oberthTexture.Width, _oberthTexture.Height);
-                    int w = (int)(_oberthTexture.Width * scale);
-                    int h = (int)(_oberthTexture.Height * scale);
-                    playerRect = new Rectangle((int)_playerPos.X - w / 2, (int)_playerPos.Y - h / 2, w, h);
-                    _spriteBatch.Draw(_oberthTexture, playerRect, Color.White);
-                }
-                else if (_playerShip == ShipClass.Constitution && _constitutionTexture != null)
-                {
-                    float scale = 80f / Math.Max(_constitutionTexture.Width, _constitutionTexture.Height);
-                    int w = (int)(_constitutionTexture.Width * scale);
-                    int h = (int)(_constitutionTexture.Height * scale);
-                    playerRect = new Rectangle((int)_playerPos.X - w / 2, (int)_playerPos.Y - h / 2, w, h);
-                    _spriteBatch.Draw(_constitutionTexture, playerRect, Color.White);
-                }
-                else if (_playerShip == ShipClass.Excelsior && _excelsiorTexture != null)
-                {
-                    float scale = 96f / Math.Max(_excelsiorTexture.Width, _excelsiorTexture.Height);
-                    int w = (int)(_excelsiorTexture.Width * scale);
-                    int h = (int)(_excelsiorTexture.Height * scale);
-                    playerRect = new Rectangle((int)_playerPos.X - w / 2, (int)_playerPos.Y - h / 2, w, h);
-                    _spriteBatch.Draw(_excelsiorTexture, playerRect, Color.White);
+                    float scale = shipRenderSize / Math.Max(shipTex.Width, shipTex.Height);
+                    int w = (int)(shipTex.Width  * scale);
+                    int h = (int)(shipTex.Height * scale);
+                    _spriteBatch.Draw(shipTex, new Rectangle((int)_playerPos.X - w / 2, (int)_playerPos.Y - h / 2, w, h), shipTint);
                 }
                 else
                 {
-                    _spriteBatch.Draw(_pixel, playerRect, Color.Cyan);
+                    int fallback = 10 + (int)_playerShip * 3;
+                    _spriteBatch.Draw(_pixel, new Rectangle((int)_playerPos.X - fallback / 2, (int)_playerPos.Y - fallback / 2, fallback, fallback),
+                        _playerInvincibleTimer > 0f ? Color.Red : Color.Cyan);
                 }
             }
 
@@ -1252,6 +1284,22 @@ public class Game1 : Game
             // Draw Enemies (JemHadar/Breen/Cardassian represented as pink/purple boxes)
             foreach(var enemy in _enemies)
             {
+                // Health bar
+                int barW = enemy.IsBoss ? 90 : 40;
+                int barH = 4;
+                int barX = (int)enemy.Position.X - barW / 2;
+                int barY = (int)enemy.Position.Y + (enemy.IsBoss ? 72 : 24);
+                float hpPct = Math.Max(0f, (float)enemy.Health / enemy.MaxHealth);
+                Color hpColor = hpPct > 0.5f ? Color.LimeGreen : hpPct > 0.25f ? Color.Yellow : Color.Red;
+                _spriteBatch.Draw(_pixel, new Rectangle(barX, barY, barW, barH), Color.DarkGray * 0.7f);
+                _spriteBatch.Draw(_pixel, new Rectangle(barX, barY, (int)(hpPct * barW), barH), hpColor);
+
+                // Boss phase 2 glow
+                if (enemy.IsBoss && _bossPhaseTwo)
+                {
+                    float glowPulse = 0.4f + 0.6f * (float)Math.Abs(Math.Sin(gameTime.TotalGameTime.TotalSeconds * 5f));
+                    _spriteBatch.Draw(_particleTexture, enemy.Position, null, Color.OrangeRed * glowPulse, 0f, new Vector2(16, 16), 6f, SpriteEffects.None, 0f);
+                }
                 if (enemy.IsBoss)
                 {
                     if (_jemHadarBattleshipTexture != null)
@@ -1285,6 +1333,12 @@ public class Game1 : Game
             if (_playerShields > 0 && !_missionEnding)
             {
                 DrawText("HOLD SPACE TO FIRE", ScreenWidth - 260, ScreenHeight - 46, Color.White, 2);
+                DrawText("ESC-RETREAT", ScreenWidth - 130, 8, Color.Gray, 2);
+            }
+            if (_bossPhaseTwo)
+            {
+                float warningPulse = 0.6f + 0.4f * (float)Math.Abs(Math.Sin(gameTime.TotalGameTime.TotalSeconds * 4f));
+                DrawText("PHASE TWO!", ScreenWidth / 2 - 60, 8, Color.OrangeRed * warningPulse, 3);
             }
         }
         else if (_currentState == GameState.MissionReport)
@@ -1425,6 +1479,15 @@ public class Game1 : Game
                 'V' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 } },
                 'W' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 1, 1 }, { 1, 0, 1 } },
                 'U' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 0, 1 }, { 0, 1, 0 } },
+                'B' => new[,] { { 1, 1, 0 }, { 1, 0, 1 }, { 1, 1, 0 }, { 1, 0, 1 }, { 1, 1, 0 } },
+                'J' => new[,] { { 0, 1, 1 }, { 0, 0, 1 }, { 0, 0, 1 }, { 1, 0, 1 }, { 0, 1, 0 } },
+                'K' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 1, 1, 0 }, { 1, 0, 1 }, { 1, 0, 1 } },
+                'Q' => new[,] { { 0, 1, 0 }, { 1, 0, 1 }, { 1, 0, 1 }, { 1, 1, 1 }, { 0, 1, 1 } },
+                'X' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 0, 1, 0 }, { 1, 0, 1 }, { 1, 0, 1 } },
+                'Y' => new[,] { { 1, 0, 1 }, { 1, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 }, { 0, 1, 0 } },
+                'Z' => new[,] { { 1, 1, 1 }, { 0, 0, 1 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 1, 1 } },
+                '-' => new[,] { { 0, 0, 0 }, { 0, 0, 0 }, { 1, 1, 1 }, { 0, 0, 0 }, { 0, 0, 0 } },
+                '!' => new[,] { { 0, 1, 0 }, { 0, 1, 0 }, { 0, 1, 0 }, { 0, 0, 0 }, { 0, 1, 0 } },
                 '/' => new[,] { { 0, 0, 1 }, { 0, 1, 0 }, { 0, 1, 0 }, { 1, 0, 0 }, { 1, 0, 0 } },
                 _ => new[,] { { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 } }
             };
@@ -1442,29 +1505,35 @@ public class Game1 : Game
         }
     }
 
+    // Returns (texture, renderSize, tint) for the current player ship.
+    // Ships without their own asset fall back to the nearest available texture.
+    private (Texture2D? tex, float renderSize, Color tint) GetPlayerShipVisual() => _playerShip switch
+    {
+        ShipClass.Oberth      => (_oberthTexture,       64f,  Color.White),
+        ShipClass.Constitution => (_constitutionTexture, 80f,  Color.White),
+        ShipClass.Excelsior   => (_excelsiorTexture,     96f,  Color.White),
+        ShipClass.Defiant     => (_oberthTexture,        72f,  new Color(180, 220, 255)),   // blue-white tint
+        ShipClass.Akira       => (_constitutionTexture,  88f,  new Color(200, 255, 200)),   // green-white tint
+        ShipClass.Galaxy      => (_excelsiorTexture,    108f,  new Color(255, 230, 180)),   // warm gold tint
+        ShipClass.Sovereign   => (_excelsiorTexture,    120f,  new Color(220, 180, 255)),   // purple-white tint
+        _                     => (_oberthTexture,        64f,  Color.White)
+    };
+
     private Rectangle GetPlayerBounds()
     {
-        int shipSize = 10 + (int)_playerShip * 3;
-        int width = shipSize;
-        int height = shipSize;
+        var (tex, renderSize, _) = GetPlayerShipVisual();
+        int width, height;
 
-        if (_playerShip == ShipClass.Oberth && _oberthTexture != null)
+        if (tex != null)
         {
-            float scale = 64f / Math.Max(_oberthTexture.Width, _oberthTexture.Height);
-            width = (int)(_oberthTexture.Width * scale);
-            height = (int)(_oberthTexture.Height * scale);
+            float scale = renderSize / Math.Max(tex.Width, tex.Height);
+            width  = (int)(tex.Width  * scale);
+            height = (int)(tex.Height * scale);
         }
-        else if (_playerShip == ShipClass.Constitution && _constitutionTexture != null)
+        else
         {
-            float scale = 80f / Math.Max(_constitutionTexture.Width, _constitutionTexture.Height);
-            width = (int)(_constitutionTexture.Width * scale);
-            height = (int)(_constitutionTexture.Height * scale);
-        }
-        else if (_playerShip == ShipClass.Excelsior && _excelsiorTexture != null)
-        {
-            float scale = 96f / Math.Max(_excelsiorTexture.Width, _excelsiorTexture.Height);
-            width = (int)(_excelsiorTexture.Width * scale);
-            height = (int)(_excelsiorTexture.Height * scale);
+            int fallback = 10 + (int)_playerShip * 3;
+            width = height = fallback;
         }
 
         return new Rectangle((int)_playerPos.X - width / 2, (int)_playerPos.Y - height / 2, width, height);
