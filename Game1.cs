@@ -107,6 +107,11 @@ public class Game1 : Game
         public float FireTimer;
         public float FireInterval;
 
+        // Boss Parts
+        public int LeftPodHealth;
+        public int RightPodHealth;
+        public int EngineHealth;
+
         public bool IsBoss => Type == EnemyType.Dreadnought;
     }
 
@@ -134,6 +139,24 @@ public class Game1 : Game
     private KeyboardState _previousKeyboardState;
     private bool _isApplyingGraphicsChanges = false;
     private bool _isFullscreenDesktop = true;
+
+    // Dash / Evade
+    private float _dashTimer = 0f;
+    private float _dashCooldown = 0f;
+    private Vector2 _dashDirection;
+
+    // Wingmen
+    struct Wingman
+    {
+        public Vector2 Offset;
+        public int Health;
+    }
+    private List<Wingman> _wingmen = new List<Wingman>();
+
+    // Phasers
+    private float _phaserDuration = 0f;
+    private float _phaserCooldown = 0f;
+    private Enemy? _phaserTarget;
 
     private readonly int[,,] _font = new int[10, 5, 3] {
         { {1,1,1}, {1,0,1}, {1,0,1}, {1,0,1}, {1,1,1} },
@@ -424,6 +447,9 @@ public class Game1 : Game
         _explosions.Clear();
         _powerUps.Clear();
         _asteroids.Clear();
+        _wingmen.Clear();
+        _wingmen.Add(new Wingman { Offset = new Vector2(-40, 20), Health = 50 });
+        _wingmen.Add(new Wingman { Offset = new Vector2(40, 20), Health = 50 });
         _screenShakeTimer = 0f;
         _cameraOffset = Vector2.Zero;
         _missionEnding = false;
@@ -434,6 +460,11 @@ public class Game1 : Game
         _missionDamageTaken = 0;
         _playerFireCooldown = 0f;
         _rapidFireTimer = 0f;
+        _dashTimer = 0f;
+        _dashCooldown = 0f;
+        _phaserDuration = 0f;
+        _phaserCooldown = 0f;
+        _phaserTarget = null;
         _comboTimer = 0f;
         _comboMultiplier = 1;
         _missionWeaponBonus = _nextMissionWeaponBonus;
@@ -463,6 +494,9 @@ public class Game1 : Game
                 Type = EnemyType.Dreadnought,
                 Health = 420 + (_missionsCompleted * 70),
                 MaxHealth = 420 + (_missionsCompleted * 70),
+                LeftPodHealth = 150,
+                RightPodHealth = 150,
+                EngineHealth = 200,
                 Phase = (float)_rng.NextDouble() * MathHelper.TwoPi,
                 FireTimer = 0.1f,
                 FireInterval = 0.45f
@@ -598,6 +632,16 @@ public class Game1 : Game
         {
             Vector2 toPlayer = Vector2.Normalize(_playerPos - origin);
             velocity = new Vector2(toPlayer.X * 150f, Math.Abs(toPlayer.Y) * 330f + 280f);
+
+            // Pod attacks
+            if (enemy.LeftPodHealth > 0)
+            {
+                _enemyProjectiles.Add(new Projectile { Position = enemy.Position + new Vector2(-40, 10), Velocity = new Vector2(-50, 300), Damage = 15, Radius = 6f, IsEnemy = true });
+            }
+            if (enemy.RightPodHealth > 0)
+            {
+                _enemyProjectiles.Add(new Projectile { Position = enemy.Position + new Vector2(40, 10), Velocity = new Vector2(50, 300), Damage = 15, Radius = 6f, IsEnemy = true });
+            }
         }
         else
         {
@@ -672,10 +716,10 @@ public class Game1 : Game
         {
             var star = _stars[i];
             star.Position.Y += star.Speed * 3f * scrollSpeedMultiplier * (float)gameTime.ElapsedGameTime.TotalSeconds;
-            if (star.Position.Y > GraphicsDevice.Viewport.Height)
+            if (star.Position.Y > ScreenHeight)
             {
                 star.Position.Y = 0;
-                star.Position.X = _rng.Next(0, GraphicsDevice.Viewport.Width);
+                star.Position.X = _rng.Next(0, ScreenWidth);
             }
             _stars[i] = star;
         }
@@ -685,10 +729,10 @@ public class Game1 : Game
             var neb = _nebulae[i];
             neb.Position.Y += neb.Speed * scrollSpeedMultiplier * (float)gameTime.ElapsedGameTime.TotalSeconds;
             neb.Rotation += neb.RotationSpeed * (float)gameTime.ElapsedGameTime.TotalSeconds;
-            if (neb.Position.Y > GraphicsDevice.Viewport.Height + 400)
+            if (neb.Position.Y > ScreenHeight + 400)
             {
                 neb.Position.Y = -400;
-                neb.Position.X = _rng.Next(-200, GraphicsDevice.Viewport.Width + 200);
+                neb.Position.X = _rng.Next(-200, ScreenWidth + 200);
             }
             _nebulae[i] = neb;
         }
@@ -698,10 +742,10 @@ public class Game1 : Game
             var planet = _planets[i];
             planet.Position.Y += planet.Speed * scrollSpeedMultiplier * (float)gameTime.ElapsedGameTime.TotalSeconds;
             planet.Rotation += planet.RotationSpeed * (float)gameTime.ElapsedGameTime.TotalSeconds;
-            if (planet.Position.Y > GraphicsDevice.Viewport.Height + 200)
+            if (planet.Position.Y > ScreenHeight + 200)
             {
                 planet.Position.Y = -200;
-                planet.Position.X = _rng.Next(-100, GraphicsDevice.Viewport.Width + 100);
+                planet.Position.X = _rng.Next(-100, ScreenWidth + 100);
                 planet.Color = new Color((float)_rng.NextDouble()*0.6f+0.4f, (float)_rng.NextDouble()*0.6f+0.4f, (float)_rng.NextDouble()*0.6f+0.4f);
             }
             _planets[i] = planet;
@@ -738,17 +782,89 @@ public class Game1 : Game
                 _playerInvincibleTimer -= dt;
             }
 
-            if (_playerShields > 0)
-            {
-                if (kb.IsKeyDown(Keys.W)) _playerPos.Y -= stats.Speed * dt;
-                if (kb.IsKeyDown(Keys.S)) _playerPos.Y += stats.Speed * dt;
-                if (kb.IsKeyDown(Keys.A)) _playerPos.X -= stats.Speed * dt;
-                if (kb.IsKeyDown(Keys.D)) _playerPos.X += stats.Speed * dt;
+            if (_dashCooldown > 0f) _dashCooldown -= dt;
+            if (_phaserCooldown > 0f) _phaserCooldown -= dt;
 
-                _playerPos.X = MathHelper.Clamp(_playerPos.X, 30, GraphicsDevice.Viewport.Width - 30);
-                _playerPos.Y = MathHelper.Clamp(_playerPos.Y, 30, GraphicsDevice.Viewport.Height - 30);
+            if (_dashTimer > 0f)
+            {
+                _dashTimer -= dt;
+                _playerPos += _dashDirection * stats.Speed * 3f * dt;
+                _playerPos.X = MathHelper.Clamp(_playerPos.X, 30, ScreenWidth - 30);
+                _playerPos.Y = MathHelper.Clamp(_playerPos.Y, 30, ScreenHeight - 30);
+                _playerInvincibleTimer = 0.1f;
+                // Leave a trail
+                if ((int)(gameTime.TotalGameTime.TotalSeconds * 30f) % 2 == 0)
+                {
+                   _explosions.Add(new Explosion { Position = _playerPos, Timer = 0f, Duration = 0.3f, MaxRadius = 15f }); 
+                }
+            }
+            else if (_playerShields > 0)
+            {
+                Vector2 moveInput = Vector2.Zero;
+                if (kb.IsKeyDown(Keys.W)) moveInput.Y -= 1;
+                if (kb.IsKeyDown(Keys.S)) moveInput.Y += 1;
+                if (kb.IsKeyDown(Keys.A)) moveInput.X -= 1;
+                if (kb.IsKeyDown(Keys.D)) moveInput.X += 1;
+
+                if (moveInput.LengthSquared() > 0)
+                {
+                    moveInput.Normalize();
+                    _playerPos += moveInput * stats.Speed * dt;
+
+                    if (kb.IsKeyDown(Keys.LeftShift) && _dashCooldown <= 0f)
+                    {
+                        _dashTimer = 0.2f;
+                        _dashCooldown = 2.0f;
+                        _dashDirection = moveInput;
+                    }
+                }
+
+                _playerPos.X = MathHelper.Clamp(_playerPos.X, 30, ScreenWidth - 30);
+                _playerPos.Y = MathHelper.Clamp(_playerPos.Y, 30, ScreenHeight - 30);
 
                 FirePlayerShots(dt);
+
+                // Wingmen Firing
+                bool wantsFire = kb.IsKeyDown(Keys.Space);
+                if (wantsFire && _playerFireCooldown <= 0f && !_missionEnding)
+                {
+                    foreach (var w in _wingmen)
+                    {
+                        if (w.Health > 0)
+                        {
+                            _torpedoes.Add(new Projectile { Position = _playerPos + w.Offset, Velocity = new Vector2(0, -600f), Damage = 8, Radius = 4f, IsEnemy = false });
+                        }
+                    }
+                }
+
+                // Phaser Logic
+                if (kb.IsKeyDown(Keys.LeftAlt) && _phaserCooldown <= 0f && _enemies.Count > 0)
+                {
+                    _phaserTarget = _enemies[0];
+                    float minDist = Vector2.DistanceSquared(_playerPos, _phaserTarget.Position);
+                    foreach (var e in _enemies)
+                    {
+                        float d = Vector2.DistanceSquared(_playerPos, e.Position);
+                        if (d < minDist) { minDist = d; _phaserTarget = e; }
+                    }
+                    _phaserDuration = 1.0f;
+                    _phaserCooldown = 5.0f;
+                }
+
+                if (_phaserDuration > 0f && _phaserTarget != null)
+                {
+                    _phaserDuration -= dt;
+                    if (_phaserTarget.Health > 0)
+                    {
+                        _phaserTarget.Health -= (int)(150f * dt);
+                        if ((int)(gameTime.TotalGameTime.TotalSeconds * 20f) % 2 == 0)
+                            _explosions.Add(new Explosion { Position = _phaserTarget.Position + new Vector2(_rng.Next(-20,20), _rng.Next(-20,20)), Timer = 0f, Duration = 0.2f, MaxRadius = 15f });
+                    }
+                    else
+                    {
+                        _phaserTarget = null;
+                    }
+                }
 
                 // Passive Shield Regen
                 if (_playerInvincibleTimer <= 0f && _playerFireCooldown <= 0f && _playerShields < stats.MaxShields)
@@ -763,10 +879,10 @@ public class Game1 : Game
                 ast.Position += ast.Velocity * dt;
                 ast.Rotation += ast.RotationSpeed * dt;
 
-                if (ast.Position.Y > GraphicsDevice.Viewport.Height + 50)
+                if (ast.Position.Y > ScreenHeight + 50)
                 {
                     ast.Position.Y = -50;
-                    ast.Position.X = _rng.Next(0, GraphicsDevice.Viewport.Width);
+                    ast.Position.X = _rng.Next(0, ScreenWidth);
                 }
 
                 Rectangle astBox = new Rectangle((int)(ast.Position.X - ast.Radius), (int)(ast.Position.Y - ast.Radius), (int)(ast.Radius * 2), (int)(ast.Radius * 2));
@@ -790,7 +906,7 @@ public class Game1 : Game
             for (int i = _torpedoes.Count - 1; i >= 0; i--)
             {
                 _torpedoes[i].Position += _torpedoes[i].Velocity * dt;
-                if (_torpedoes[i].Position.Y < -50 || _torpedoes[i].Position.Y > GraphicsDevice.Viewport.Height + 50 || _torpedoes[i].Position.X < -50 || _torpedoes[i].Position.X > GraphicsDevice.Viewport.Width + 50)
+                if (_torpedoes[i].Position.Y < -50 || _torpedoes[i].Position.Y > ScreenHeight + 50 || _torpedoes[i].Position.X < -50 || _torpedoes[i].Position.X > ScreenWidth + 50)
                 {
                     _torpedoes.RemoveAt(i);
                     continue;
@@ -814,7 +930,7 @@ public class Game1 : Game
             for (int i = _enemyProjectiles.Count - 1; i >= 0; i--)
             {
                 _enemyProjectiles[i].Position += _enemyProjectiles[i].Velocity * dt;
-                if (_enemyProjectiles[i].Position.Y > GraphicsDevice.Viewport.Height + 80 || _enemyProjectiles[i].Position.X < -80 || _enemyProjectiles[i].Position.X > GraphicsDevice.Viewport.Width + 80)
+                if (_enemyProjectiles[i].Position.Y > ScreenHeight + 80 || _enemyProjectiles[i].Position.X < -80 || _enemyProjectiles[i].Position.X > ScreenWidth + 80)
                 {
                     _enemyProjectiles.RemoveAt(i);
                 }
@@ -828,6 +944,22 @@ public class Game1 : Game
                     _screenShakeTimer = Math.Max(_screenShakeTimer, 0.15f);
                     _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 4f);
                 }
+                else
+                {
+                    // Check wingmen
+                    for (int w = 0; w < _wingmen.Count; w++)
+                    {
+                        var wm = _wingmen[w];
+                        if (wm.Health > 0 && Vector2.Distance(_playerPos + wm.Offset, _enemyProjectiles[i].Position) < 15f)
+                        {
+                            wm.Health -= _enemyProjectiles[i].Damage;
+                            _wingmen[w] = wm;
+                            _enemyProjectiles.RemoveAt(i);
+                            _explosions.Add(new Explosion { Position = _playerPos + wm.Offset, Timer = 0f, Duration = 0.3f, MaxRadius = 30f });
+                            break;
+                        }
+                    }
+                }
             }
 
             for (int i = _powerUps.Count - 1; i >= 0; i--)
@@ -837,7 +969,7 @@ public class Game1 : Game
                 power.Position.Y += (float)Math.Sin(power.BobPhase) * 10f * dt;
                 power.Position.X += (float)Math.Cos(power.BobPhase * 0.5f) * 12f * dt;
 
-                if (power.Position.Y > GraphicsDevice.Viewport.Height + 80)
+                if (power.Position.Y > ScreenHeight + 80)
                 {
                     _powerUps.RemoveAt(i);
                     continue;
@@ -907,7 +1039,7 @@ public class Game1 : Game
                     enemy.Position.X += (float)Math.Sin(enemy.Phase) * 42f * dt;
                 }
 
-                enemy.Position.X = MathHelper.Clamp(enemy.Position.X, 40, GraphicsDevice.Viewport.Width - 40);
+                enemy.Position.X = MathHelper.Clamp(enemy.Position.X, 40, ScreenWidth - 40);
 
                 enemy.FireTimer -= dt;
                 if (enemy.Position.Y > -60 && enemy.FireTimer <= 0f)
@@ -923,7 +1055,34 @@ public class Game1 : Game
                 bool hit = false;
                 for (int j = _torpedoes.Count - 1; j >= 0; j--)
                 {
-                    if (Vector2.Distance(enemy.Position, _torpedoes[j].Position) < (enemy.IsBoss ? 54 : enemy.Type == EnemyType.Bomber ? 34 : 28))
+                    if (enemy.IsBoss)
+                    {
+                        // Check Parts
+                        if (enemy.LeftPodHealth > 0 && Vector2.Distance(enemy.Position + new Vector2(-40, 10), _torpedoes[j].Position) < 20f)
+                        {
+                            enemy.LeftPodHealth -= GetShipStats(_playerShip).Damage;
+                            hit = true;
+                            _torpedoes.RemoveAt(j);
+                            if (enemy.LeftPodHealth <= 0) _explosions.Add(new Explosion { Position = enemy.Position + new Vector2(-40, 10), Timer = 0f, Duration = 1.0f, MaxRadius = 150f });
+                            break;
+                        }
+                        else if (enemy.RightPodHealth > 0 && Vector2.Distance(enemy.Position + new Vector2(40, 10), _torpedoes[j].Position) < 20f)
+                        {
+                            enemy.RightPodHealth -= GetShipStats(_playerShip).Damage;
+                            hit = true;
+                            _torpedoes.RemoveAt(j);
+                            if (enemy.RightPodHealth <= 0) _explosions.Add(new Explosion { Position = enemy.Position + new Vector2(40, 10), Timer = 0f, Duration = 1.0f, MaxRadius = 150f });
+                            break;
+                        }
+                        else if (Vector2.Distance(enemy.Position, _torpedoes[j].Position) < 54)
+                        {
+                            hit = true;
+                            _score += 25 * _comboMultiplier;
+                            _torpedoes.RemoveAt(j);
+                            break;
+                        }
+                    }
+                    else if (Vector2.Distance(enemy.Position, _torpedoes[j].Position) < (enemy.Type == EnemyType.Bomber ? 34 : 28))
                     {
                         hit = true;
                         _score += 25 * _comboMultiplier;
@@ -932,14 +1091,20 @@ public class Game1 : Game
                     }
                 }
 
-                if (hit)
+                if (hit && !enemy.IsBoss)
                 {
                     enemy.Health -= GetShipStats(_playerShip).Damage;
-                    _screenShakeTimer = Math.Max(_screenShakeTimer, enemy.IsBoss ? 0.45f : 0.16f);
-                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, enemy.IsBoss ? 9f : 3f);
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 0.16f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 3f);
+                }
+                else if (hit && enemy.IsBoss)
+                {
+                     enemy.Health -= GetShipStats(_playerShip).Damage / 2; // Reduced damage if hitting main body instead of targeted part destroying
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 0.45f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 9f);
                 }
 
-                if (hit && enemy.Health <= 0)
+                if ((hit || enemy.Health <=0) && enemy.Health <= 0)
                 {
                     _missionShipsDestroyed++;
                     _comboTimer = 2.2f;
@@ -956,7 +1121,7 @@ public class Game1 : Game
                     continue;
                 }
 
-                if (enemy.Position.Y > GraphicsDevice.Viewport.Height + 40)
+                if (enemy.Position.Y > ScreenHeight + 40)
                 {
                     _missionShipsEscaped++;
                     _enemies.RemoveAt(i);
@@ -1128,7 +1293,7 @@ public class Game1 : Game
         {
             if (_strategicBackground != null)
             {
-                _spriteBatch.Draw(_strategicBackground, new Rectangle(0, 0, GraphicsDevice.Viewport.Width, GraphicsDevice.Viewport.Height), Color.White);
+                _spriteBatch.Draw(_strategicBackground, new Rectangle(0, 0, ScreenWidth, ScreenHeight), Color.White);
             }
             else
             {
@@ -1140,7 +1305,7 @@ public class Game1 : Game
             DrawText("STRATEGIC VIEW", 58, 24, Color.White, 4);
             DrawText("NEXT MISSION " + GetMissionTypeLabel(_currentMissionType), 58, 60, Color.LightCyan, 3);
 
-            int midY = GraphicsDevice.Viewport.Height / 2;
+            int midY = ScreenHeight / 2;
 
             // Federation Side
             int fedH = 128;
@@ -1176,18 +1341,18 @@ public class Game1 : Game
                 float domScale = 128f / Math.Max(_dominionLogo.Width, _dominionLogo.Height);
                 domW = (int)(_dominionLogo.Width * domScale);
                 domH = (int)(_dominionLogo.Height * domScale);
-                _spriteBatch.Draw(_dominionLogo, new Rectangle(GraphicsDevice.Viewport.Width - 100 - domW, midY - domH / 2, domW, domH), Color.White);
+                _spriteBatch.Draw(_dominionLogo, new Rectangle(ScreenWidth - 100 - domW, midY - domH / 2, domW, domH), Color.White);
             }
             else
             {
-                _spriteBatch.Draw(_pixel, new Rectangle(GraphicsDevice.Viewport.Width - 100 - domW, midY - domH / 2, domW, domH), Color.Red);
+                _spriteBatch.Draw(_pixel, new Rectangle(ScreenWidth - 100 - domW, midY - domH / 2, domW, domH), Color.Red);
             }
 
             string domLabel = "DOMINION";
             int domLabelWidth = domLabel.Length * 3 * 4;
-            DrawText(domLabel, (GraphicsDevice.Viewport.Width - 100 - domW) + (domW / 2) - (domLabelWidth / 2), midY - domH / 2 - 24, Color.OrangeRed, 3);
+            DrawText(domLabel, (ScreenWidth - 100 - domW) + (domW / 2) - (domLabelWidth / 2), midY - domH / 2 - 24, Color.OrangeRed, 3);
 
-            int domBarRight = GraphicsDevice.Viewport.Width - 100 - domW - 20;
+            int domBarRight = ScreenWidth - 100 - domW - 20;
             int domBarY = midY - 20;
             _spriteBatch.Draw(_pixel, new Rectangle(domBarRight - 304, domBarY, 304, 40), Color.DarkRed * 0.55f);
             int domSegments = Math.Max(0, _dominionStrength) / 5;
@@ -1196,7 +1361,7 @@ public class Game1 : Game
 
             // Player class marker
             int shipMarkerSize = 64 + (int)_playerShip * 16;
-            Rectangle shipRect = new Rectangle(GraphicsDevice.Viewport.Width / 2 - shipMarkerSize / 2, midY + 40, shipMarkerSize, shipMarkerSize);
+            Rectangle shipRect = new Rectangle(ScreenWidth / 2 - shipMarkerSize / 2, midY + 40, shipMarkerSize, shipMarkerSize);
             var (markerTex, _, markerTint) = GetPlayerShipVisual();
             if (markerTex != null)
                 _spriteBatch.Draw(markerTex, shipRect, markerTint);
@@ -1206,16 +1371,16 @@ public class Game1 : Game
             // Flashing Start prompt
             if ((int)(gameTime.TotalGameTime.TotalSeconds * 2) % 2 == 0)
             {
-                int promptX = GraphicsDevice.Viewport.Width / 2 - 180;
-                int promptY = GraphicsDevice.Viewport.Height - 102;
+                int promptX = ScreenWidth / 2 - 180;
+                int promptY = ScreenHeight - 102;
                 DrawText("PRESS ENTER TO START", promptX + 16, promptY + 5, Color.White, 4);
             }
 
-            DrawText("LIVES", 70, GraphicsDevice.Viewport.Height - 52, Color.White, 3);
+            DrawText("LIVES", 70, ScreenHeight - 52, Color.White, 3);
             for (int i = 0; i < 3; i++)
             {
                 int iconX = 150 + i * 42;
-                int iconY = GraphicsDevice.Viewport.Height - 62;
+                int iconY = ScreenHeight - 62;
                 bool active = i < _livesRemaining;
                 Color iconColor = active ? Color.White : Color.Gray * 0.45f;
                 if (active && _livesRemaining == 1 && i == 0)
@@ -1238,7 +1403,7 @@ public class Game1 : Game
 
             if (_nextMissionWeaponBonus != WeaponMode.Standard)
             {
-                DrawText("ARMORY UPGRADE READY", 490, GraphicsDevice.Viewport.Height - 52, Color.Yellow, 3);
+                DrawText("ARMORY UPGRADE READY", 490, ScreenHeight - 52, Color.Yellow, 3);
             }
 
             DrawText("SCORE", 20, 20, Color.White, 3);
@@ -1246,7 +1411,7 @@ public class Game1 : Game
 
             if ((int)_playerShip < 6)
             {
-                DrawText("PRESS U TO UPGRADE SHIP 1000 SCORE", 490, GraphicsDevice.Viewport.Height - 92, _score >= 1000 ? Color.Cyan : Color.Gray, 2);
+                DrawText("PRESS U TO UPGRADE SHIP 1000 SCORE", 490, ScreenHeight - 92, _score >= 1000 ? Color.Cyan : Color.Gray, 2);
             }
         }
         else if (_currentState == GameState.TacticalMission)
@@ -1338,6 +1503,28 @@ public class Game1 : Game
                     _spriteBatch.Draw(_pixel, new Rectangle((int)_playerPos.X - fallback / 2, (int)_playerPos.Y - fallback / 2, fallback, fallback),
                         _playerInvincibleTimer > 0f ? Color.Red : Color.Cyan);
                 }
+            }
+
+            // Draw Wingmen
+            foreach (var w in _wingmen)
+            {
+                if (w.Health > 0)
+                {
+                    int fallback = 12;
+                    _spriteBatch.Draw(_pixel, new Rectangle((int)(_playerPos.X + w.Offset.X) - fallback / 2, (int)(_playerPos.Y + w.Offset.Y) - fallback / 2, fallback, fallback), Color.LightSteelBlue);
+                }
+            }
+
+            // Draw Phaser
+            if (_phaserDuration > 0f && _phaserTarget != null)
+            {
+                Vector2 start = _playerPos;
+                Vector2 end = _phaserTarget.Position;
+                Vector2 diff = end - start;
+                float dist = diff.Length();
+                float angle = (float)Math.Atan2(diff.Y, diff.X);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)start.X, (int)start.Y, (int)dist, 6), null, Color.Orange * 0.8f, angle, new Vector2(0, 3), SpriteEffects.None, 0f);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)start.X, (int)start.Y, (int)dist, 2), null, Color.White, angle, new Vector2(0, 1), SpriteEffects.None, 0f);
             }
 
             // Draw Torpedoes (Photon Torpedoes)
