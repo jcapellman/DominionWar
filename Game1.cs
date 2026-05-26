@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
-using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 
@@ -24,6 +23,38 @@ public class Game1 : Game
     private Texture2D _strategicBackground;
     private Texture2D _federationLogo;
     private Texture2D _dominionLogo;
+
+    enum EnemyType { Fighter, Interceptor, Bomber, Dreadnought }
+    enum MissionType { Assault, HoldTheLine, BossHunt }
+    enum PowerUpType { Shield, RapidFire, SpreadShot, ScoreBoost }
+    enum WeaponMode { Standard, Twin, Spread }
+
+    struct ShipStats
+    {
+        public float Speed;
+        public int MaxShields;
+        public float FireCooldown;
+        public int Damage;
+        public int ShotCount;
+        public float ShotSpread;
+        public WeaponMode DefaultWeaponMode;
+    }
+
+    class Projectile
+    {
+        public Vector2 Position;
+        public Vector2 Velocity;
+        public int Damage;
+        public float Radius;
+        public bool IsEnemy;
+    }
+
+    class PowerUp
+    {
+        public Vector2 Position;
+        public PowerUpType Type;
+        public float BobPhase;
+    }
 
     struct BackgroundElement
     {
@@ -54,11 +85,17 @@ public class Game1 : Game
         public float MaxRadius;
     }
 
-    public class Enemy
+    private class Enemy
     {
         public Vector2 Position;
-        public bool IsBoss;
+        public EnemyType Type;
         public int Health;
+        public int MaxHealth;
+        public float Phase;
+        public float FireTimer;
+        public float FireInterval;
+
+        public bool IsBoss => Type == EnemyType.Dreadnought;
     }
 
     // Game States
@@ -74,6 +111,14 @@ public class Game1 : Game
     private int _federationStrength = 100;
     private int _score = 0;
     private int _playerShields = 100;
+    private MissionType _currentMissionType = MissionType.Assault;
+    private WeaponMode _missionWeaponBonus = WeaponMode.Standard;
+    private WeaponMode _nextMissionWeaponBonus = WeaponMode.Standard;
+    private int _nextMissionEnemyModifier = 0;
+    private float _playerFireCooldown = 0f;
+    private float _rapidFireTimer = 0f;
+    private float _comboTimer = 0f;
+    private int _comboMultiplier = 1;
 
     private readonly int[,,] _font = new int[10, 5, 3] {
         { {1,1,1}, {1,0,1}, {1,0,1}, {1,0,1}, {1,1,1} },
@@ -91,9 +136,10 @@ public class Game1 : Game
     // Tactical Data
     private Vector2 _playerPos;
     private List<Enemy> _enemies = new List<Enemy>();
-    private List<Vector2> _torpedoes = new List<Vector2>();
-    private List<Vector2> _enemyProjectiles = new List<Vector2>();
+    private List<Projectile> _torpedoes = new List<Projectile>();
+    private List<Projectile> _enemyProjectiles = new List<Projectile>();
     private List<Explosion> _explosions = new List<Explosion>();
+    private List<PowerUp> _powerUps = new List<PowerUp>();
     private Random _rng = new Random();
     private bool _missionEnding = false;
     private float _missionEndTimer = 0f;
@@ -215,6 +261,244 @@ public class Game1 : Game
         }
     }
 
+    private ShipStats GetShipStats(ShipClass shipClass) => shipClass switch
+    {
+        ShipClass.Oberth => new ShipStats { Speed = 420f, MaxShields = 90, FireCooldown = 0.26f, Damage = 18, ShotCount = 1, ShotSpread = 0f, DefaultWeaponMode = WeaponMode.Standard },
+        ShipClass.Constitution => new ShipStats { Speed = 380f, MaxShields = 110, FireCooldown = 0.22f, Damage = 18, ShotCount = 2, ShotSpread = 0.10f, DefaultWeaponMode = WeaponMode.Twin },
+        ShipClass.Excelsior => new ShipStats { Speed = 345f, MaxShields = 125, FireCooldown = 0.2f, Damage = 16, ShotCount = 3, ShotSpread = 0.12f, DefaultWeaponMode = WeaponMode.Spread },
+        ShipClass.Defiant => new ShipStats { Speed = 470f, MaxShields = 95, FireCooldown = 0.16f, Damage = 14, ShotCount = 2, ShotSpread = 0.08f, DefaultWeaponMode = WeaponMode.Twin },
+        ShipClass.Akira => new ShipStats { Speed = 395f, MaxShields = 120, FireCooldown = 0.18f, Damage = 15, ShotCount = 3, ShotSpread = 0.11f, DefaultWeaponMode = WeaponMode.Spread },
+        ShipClass.Galaxy => new ShipStats { Speed = 320f, MaxShields = 150, FireCooldown = 0.24f, Damage = 22, ShotCount = 3, ShotSpread = 0.14f, DefaultWeaponMode = WeaponMode.Spread },
+        ShipClass.Sovereign => new ShipStats { Speed = 360f, MaxShields = 140, FireCooldown = 0.14f, Damage = 18, ShotCount = 4, ShotSpread = 0.12f, DefaultWeaponMode = WeaponMode.Spread },
+        _ => new ShipStats { Speed = 360f, MaxShields = 100, FireCooldown = 0.24f, Damage = 16, ShotCount = 1, ShotSpread = 0f, DefaultWeaponMode = WeaponMode.Standard }
+    };
+
+    private WeaponMode GetEffectiveWeaponMode() => _missionWeaponBonus != WeaponMode.Standard ? _missionWeaponBonus : GetShipStats(_playerShip).DefaultWeaponMode;
+
+    private void StartMission()
+    {
+        var stats = GetShipStats(_playerShip);
+        _currentMissionType = (_missionsCompleted % 3) switch
+        {
+            0 => MissionType.Assault,
+            1 => MissionType.HoldTheLine,
+            _ => MissionType.BossHunt
+        };
+
+        _playerPos = new Vector2(400, 300);
+        _playerShields = stats.MaxShields;
+        _enemies.Clear();
+        _torpedoes.Clear();
+        _enemyProjectiles.Clear();
+        _explosions.Clear();
+        _powerUps.Clear();
+        _screenShakeTimer = 0f;
+        _cameraOffset = Vector2.Zero;
+        _missionEnding = false;
+        _missionEndTimer = 0f;
+        _missionWon = false;
+        _missionShipsDestroyed = 0;
+        _missionShipsEscaped = 0;
+        _missionDamageTaken = 0;
+        _playerFireCooldown = 0f;
+        _rapidFireTimer = 0f;
+        _comboTimer = 0f;
+        _comboMultiplier = 1;
+        _missionWeaponBonus = _nextMissionWeaponBonus;
+        _nextMissionWeaponBonus = WeaponMode.Standard;
+
+        int enemyCount = Math.Max(6, 10 + (_missionsCompleted * 4) + _rng.Next(0, 8) + _nextMissionEnemyModifier);
+        _nextMissionEnemyModifier = 0;
+
+        if (_currentMissionType == MissionType.BossHunt)
+        {
+            _enemies.Add(new Enemy
+            {
+                Position = new Vector2(400, -140),
+                Type = EnemyType.Dreadnought,
+                Health = 420 + (_missionsCompleted * 70),
+                MaxHealth = 420 + (_missionsCompleted * 70),
+                Phase = (float)_rng.NextDouble() * MathHelper.TwoPi,
+                FireTimer = 0.1f,
+                FireInterval = 0.45f
+            });
+
+            for (int i = 0; i < Math.Min(8, 4 + _missionsCompleted); i++)
+            {
+                AddEnemyWaveUnit(EnemyType.Fighter, true);
+            }
+        }
+        else if (_currentMissionType == MissionType.HoldTheLine)
+        {
+            for (int i = 0; i < enemyCount; i++)
+            {
+                var type = i % 4 == 0 ? EnemyType.Bomber : (i % 3 == 0 ? EnemyType.Interceptor : EnemyType.Fighter);
+                AddEnemyWaveUnit(type, false);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < enemyCount; i++)
+            {
+                var roll = _rng.NextDouble();
+                var type = roll < 0.5 ? EnemyType.Fighter : roll < 0.8 ? EnemyType.Interceptor : EnemyType.Bomber;
+                AddEnemyWaveUnit(type, false);
+            }
+        }
+    }
+
+    private void AddEnemyWaveUnit(EnemyType type, bool bossEscort)
+    {
+        int baseY = bossEscort ? _rng.Next(-420, -80) : _rng.Next(-1200, -100);
+        int xMin = bossEscort ? 120 : 40;
+        int xMax = bossEscort ? 680 : 760;
+        int health = type switch
+        {
+            EnemyType.Interceptor => 26,
+            EnemyType.Bomber => 42,
+            _ => 20
+        };
+
+        float fireInterval = type switch
+        {
+            EnemyType.Interceptor => 1.0f,
+            EnemyType.Bomber => 0.8f,
+            _ => 1.35f
+        };
+
+        _enemies.Add(new Enemy
+        {
+            Position = new Vector2(_rng.Next(xMin, xMax), baseY),
+            Type = type,
+            Health = health,
+            MaxHealth = health,
+            Phase = (float)_rng.NextDouble() * MathHelper.TwoPi,
+            FireTimer = (float)_rng.NextDouble() * fireInterval,
+            FireInterval = fireInterval
+        });
+    }
+
+    private void FirePlayerShots(float dt)
+    {
+        var stats = GetShipStats(_playerShip);
+        if (_playerFireCooldown > 0f)
+        {
+            _playerFireCooldown -= dt;
+        }
+
+        bool wantsFire = Keyboard.GetState().IsKeyDown(Keys.Space);
+        if (!wantsFire || _playerFireCooldown > 0f || _playerShields <= 0 || _missionEnding)
+        {
+            return;
+        }
+
+        WeaponMode mode = GetEffectiveWeaponMode();
+        int shotCount = stats.ShotCount;
+        float spread = stats.ShotSpread;
+        if (mode == WeaponMode.Twin)
+        {
+            shotCount = Math.Max(2, shotCount);
+            spread = Math.Max(spread, 0.12f);
+        }
+        else if (mode == WeaponMode.Spread)
+        {
+            shotCount = Math.Max(3, shotCount);
+            spread = Math.Max(spread, 0.18f);
+        }
+
+        float cooldown = stats.FireCooldown;
+        if (_rapidFireTimer > 0f)
+        {
+            cooldown *= 0.5f;
+        }
+
+        float startOffset = -((shotCount - 1) * spread) * 0.5f;
+        for (int i = 0; i < shotCount; i++)
+        {
+            float xVelocity = (startOffset + i * spread) * 600f;
+            _torpedoes.Add(new Projectile
+            {
+                Position = new Vector2(_playerPos.X, _playerPos.Y - 16),
+                Velocity = new Vector2(xVelocity, -760f),
+                Damage = stats.Damage,
+                Radius = 6f,
+                IsEnemy = false
+            });
+        }
+
+        _playerFireCooldown = cooldown;
+    }
+
+    private void SpawnEnemyProjectile(Enemy enemy)
+    {
+        Vector2 origin = enemy.Position + new Vector2(0, enemy.IsBoss ? 45 : 12);
+        Vector2 velocity;
+
+        if (enemy.Type == EnemyType.Interceptor)
+        {
+            Vector2 toPlayer = _playerPos - origin;
+            if (toPlayer.LengthSquared() < 0.001f)
+                toPlayer = Vector2.UnitY;
+            else
+                toPlayer = Vector2.Normalize(toPlayer);
+            velocity = new Vector2(toPlayer.X * 170f, Math.Abs(toPlayer.Y) * 360f + 260f);
+        }
+        else if (enemy.Type == EnemyType.Bomber)
+        {
+            velocity = new Vector2(((float)_rng.NextDouble() * 2f - 1f) * 70f, 390f);
+        }
+        else if (enemy.IsBoss)
+        {
+            Vector2 toPlayer = Vector2.Normalize(_playerPos - origin);
+            velocity = new Vector2(toPlayer.X * 150f, Math.Abs(toPlayer.Y) * 330f + 280f);
+        }
+        else
+        {
+            velocity = new Vector2(((float)_rng.NextDouble() * 2f - 1f) * 45f, 420f);
+        }
+
+        _enemyProjectiles.Add(new Projectile
+        {
+            Position = origin,
+            Velocity = velocity,
+            Damage = enemy.IsBoss ? 30 : enemy.Type == EnemyType.Bomber ? 18 : 10,
+            Radius = enemy.IsBoss ? 10f : 5f,
+            IsEnemy = true
+        });
+    }
+
+    private void SpawnPowerUp(Vector2 position)
+    {
+        PowerUpType type = (PowerUpType)_rng.Next(0, 4);
+        _powerUps.Add(new PowerUp
+        {
+            Position = position,
+            Type = type,
+            BobPhase = (float)_rng.NextDouble() * MathHelper.TwoPi
+        });
+    }
+
+    private void ApplyMissionReward(Keys rewardKey)
+    {
+        if (rewardKey == Keys.D1 || rewardKey == Keys.NumPad1)
+        {
+            _livesRemaining = Math.Min(5, _livesRemaining + 1);
+            _federationStrength = Math.Min(100, _federationStrength + 15);
+            _score += 150;
+        }
+        else if (rewardKey == Keys.D2 || rewardKey == Keys.NumPad2)
+        {
+            _nextMissionWeaponBonus = WeaponMode.Spread;
+            _score += 300;
+        }
+        else if (rewardKey == Keys.D3 || rewardKey == Keys.NumPad3)
+        {
+            _nextMissionEnemyModifier -= 4;
+            _dominionStrength = Math.Max(0, _dominionStrength - 10);
+            _score += 200;
+        }
+    }
+
     protected override void Update(GameTime gameTime)
     {
         var kb = Keyboard.GetState();
@@ -262,106 +546,159 @@ public class Game1 : Game
 
         if (_currentState == GameState.StrategicView)
         {
-            // Press Enter to start next tactical mission
             if (kb.IsKeyDown(Keys.Enter))
             {
+                StartMission();
                 _currentState = GameState.TacticalMission;
-                _playerPos = new Vector2(400, 300);
-                _playerShields = 100;
-                _enemies.Clear();
-                _torpedoes.Clear();
-                _enemyProjectiles.Clear();
-                _explosions.Clear();
-                _screenShakeTimer = 0f;
-                _cameraOffset = Vector2.Zero;
-                _missionEnding = false;
-                _missionEndTimer = 0f;
-                _missionWon = false;
-                _missionShipsDestroyed = 0;
-                _missionShipsEscaped = 0;
-                _missionDamageTaken = 0;
-
-                bool isBoss = (_missionsCompleted > 0 && _missionsCompleted % 3 == 0);
-                if (isBoss)
-                {
-                    _enemies.Add(new Enemy { Position = new Vector2(400, -100), IsBoss = true, Health = 400 + (_missionsCompleted * 50) });
-                }
-                else
-                {
-                    int enemyCount = 15 + (_missionsCompleted * 5) + _rng.Next(0, 10);
-                    int minHeight = -1000 - (_missionsCompleted * 300);
-                    for(int i = 0; i < enemyCount; i++)
-                        _enemies.Add(new Enemy { Position = new Vector2(_rng.Next(40, 760), _rng.Next(minHeight, -50)), IsBoss = false, Health = 20 });
-                }
             }
         }
         else if (_currentState == GameState.TacticalMission)
         {
+            var stats = GetShipStats(_playerShip);
+            float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+
+            if (_rapidFireTimer > 0f)
+            {
+                _rapidFireTimer -= dt;
+            }
+
             if (_playerShields > 0)
             {
-                // Move player
-                if (kb.IsKeyDown(Keys.W)) _playerPos.Y -= 350f * (float)gameTime.ElapsedGameTime.TotalSeconds;
-                if (kb.IsKeyDown(Keys.S)) _playerPos.Y += 350f * (float)gameTime.ElapsedGameTime.TotalSeconds;
-                if (kb.IsKeyDown(Keys.A)) _playerPos.X -= 350f * (float)gameTime.ElapsedGameTime.TotalSeconds;
-                if (kb.IsKeyDown(Keys.D)) _playerPos.X += 350f * (float)gameTime.ElapsedGameTime.TotalSeconds;
+                if (kb.IsKeyDown(Keys.W)) _playerPos.Y -= stats.Speed * dt;
+                if (kb.IsKeyDown(Keys.S)) _playerPos.Y += stats.Speed * dt;
+                if (kb.IsKeyDown(Keys.A)) _playerPos.X -= stats.Speed * dt;
+                if (kb.IsKeyDown(Keys.D)) _playerPos.X += stats.Speed * dt;
 
                 _playerPos.X = MathHelper.Clamp(_playerPos.X, 30, GraphicsDevice.Viewport.Width - 30);
                 _playerPos.Y = MathHelper.Clamp(_playerPos.Y, 30, GraphicsDevice.Viewport.Height - 30);
 
-                // Fire torpedoes
-                if (kb.IsKeyDown(Keys.Space) && _torpedoes.Count < 15)
+                FirePlayerShots(dt);
+            }
+
+            for (int i = _torpedoes.Count - 1; i >= 0; i--)
+            {
+                _torpedoes[i].Position += _torpedoes[i].Velocity * dt;
+                if (_torpedoes[i].Position.Y < -50 || _torpedoes[i].Position.Y > GraphicsDevice.Viewport.Height + 50 || _torpedoes[i].Position.X < -50 || _torpedoes[i].Position.X > GraphicsDevice.Viewport.Width + 50)
                 {
-                    _torpedoes.Add(new Vector2(_playerPos.X, _playerPos.Y - 20));
+                    _torpedoes.RemoveAt(i);
                 }
             }
 
-            // Move Torpedoes
-            for (int i = _torpedoes.Count - 1; i >= 0; i--)
-            {
-                _torpedoes[i] = new Vector2(_torpedoes[i].X, _torpedoes[i].Y - 700f * (float)gameTime.ElapsedGameTime.TotalSeconds);
-                if (_torpedoes[i].Y < 0) _torpedoes.RemoveAt(i);
-            }
-
-            // Move Enemy Projectiles
             for (int i = _enemyProjectiles.Count - 1; i >= 0; i--)
             {
-                _enemyProjectiles[i] = new Vector2(_enemyProjectiles[i].X, _enemyProjectiles[i].Y + 450f * (float)gameTime.ElapsedGameTime.TotalSeconds);
-                if (_enemyProjectiles[i].Y > 600)
+                _enemyProjectiles[i].Position += _enemyProjectiles[i].Velocity * dt;
+                if (_enemyProjectiles[i].Position.Y > GraphicsDevice.Viewport.Height + 80 || _enemyProjectiles[i].Position.X < -80 || _enemyProjectiles[i].Position.X > GraphicsDevice.Viewport.Width + 80)
                 {
                     _enemyProjectiles.RemoveAt(i);
                 }
                 else if (_playerShields > 0 && GetPlayerBounds().Intersects(GetProjectileBounds(_enemyProjectiles[i])))
                 {
-                    _playerShields -= 10;
-                    _missionDamageTaken += 10;
+                    int dmg = _enemyProjectiles[i].Damage;
+                    _playerShields -= dmg;
+                    _missionDamageTaken += dmg;
                     _enemyProjectiles.RemoveAt(i);
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 0.15f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 4f);
                 }
             }
 
-            // Move Enemies and Collision
+            for (int i = _powerUps.Count - 1; i >= 0; i--)
+            {
+                var power = _powerUps[i];
+                power.BobPhase += dt * 4f;
+                power.Position.Y += (float)Math.Sin(power.BobPhase) * 10f * dt;
+                power.Position.X += (float)Math.Cos(power.BobPhase * 0.5f) * 12f * dt;
+
+                if (power.Position.Y > GraphicsDevice.Viewport.Height + 80)
+                {
+                    _powerUps.RemoveAt(i);
+                    continue;
+                }
+
+                Rectangle powerBounds = new Rectangle((int)power.Position.X - 16, (int)power.Position.Y - 16, 32, 32);
+                if (_playerShields > 0 && GetPlayerBounds().Intersects(powerBounds))
+                {
+                    if (power.Type == PowerUpType.Shield)
+                    {
+                        _playerShields = Math.Min(stats.MaxShields + 25, _playerShields + 35);
+                        _score += 50;
+                    }
+                    else if (power.Type == PowerUpType.RapidFire)
+                    {
+                        _rapidFireTimer = 8f;
+                        _score += 100;
+                    }
+                    else if (power.Type == PowerUpType.SpreadShot)
+                    {
+                        _missionWeaponBonus = WeaponMode.Spread;
+                        _score += 125;
+                    }
+                    else
+                    {
+                        _score += 250;
+                    }
+
+                    _explosions.Add(new Explosion { Position = power.Position, Timer = 0f, Duration = 0.55f, MaxRadius = 120f });
+                    _powerUps.RemoveAt(i);
+                }
+            }
+
             bool won = true;
             for (int i = _enemies.Count - 1; i >= 0; i--)
             {
                 won = false;
                 var enemy = _enemies[i];
-                float enemyMoveSpd = enemy.IsBoss ? 30f : (150f + Math.Min(150f, _missionsCompleted * 10f));
-                enemy.Position.Y += enemyMoveSpd * (float)gameTime.ElapsedGameTime.TotalSeconds;
-
-                // Enemies fire back randomly (only if fully on screen or close to it)
-                if (enemy.Position.Y > -50 && _rng.NextDouble() < (enemy.IsBoss ? 0.08 : 0.005))
+                float enemySpeed = enemy.Type switch
                 {
-                    _enemyProjectiles.Add(new Vector2(enemy.Position.X, enemy.Position.Y + (enemy.IsBoss ? 50 : 15)));
+                    EnemyType.Interceptor => 185f + Math.Min(110f, _missionsCompleted * 9f),
+                    EnemyType.Bomber => 105f + Math.Min(70f, _missionsCompleted * 5f),
+                    EnemyType.Dreadnought => 40f,
+                    _ => 150f + Math.Min(120f, _missionsCompleted * 8f)
+                };
+
+                enemy.Phase += dt * (enemy.IsBoss ? 2.5f : 3.5f);
+                if (enemy.Type == EnemyType.Fighter)
+                {
+                    enemy.Position.Y += enemySpeed * dt;
+                    enemy.Position.X += (float)Math.Sin(enemy.Phase) * 55f * dt;
+                }
+                else if (enemy.Type == EnemyType.Interceptor)
+                {
+                    enemy.Position.Y += enemySpeed * dt;
+                    float chase = Math.Sign(_playerPos.X - enemy.Position.X) * 115f * dt;
+                    enemy.Position.X += chase + (float)Math.Sin(enemy.Phase * 1.6f) * 35f * dt;
+                }
+                else if (enemy.Type == EnemyType.Bomber)
+                {
+                    enemy.Position.Y += enemySpeed * dt;
+                    enemy.Position.X += (float)Math.Sin(enemy.Phase) * 30f * dt;
+                }
+                else
+                {
+                    enemy.Position.Y += enemySpeed * dt;
+                    enemy.Position.X += (float)Math.Sin(enemy.Phase) * 42f * dt;
                 }
 
-                // Collision with torpedoes
+                enemy.Position.X = MathHelper.Clamp(enemy.Position.X, 40, GraphicsDevice.Viewport.Width - 40);
+
+                enemy.FireTimer -= dt;
+                if (enemy.Position.Y > -60 && enemy.FireTimer <= 0f)
+                {
+                    SpawnEnemyProjectile(enemy);
+                    enemy.FireTimer = enemy.IsBoss ? Math.Max(0.22f, enemy.FireInterval - (_missionsCompleted * 0.01f)) : enemy.FireInterval;
+                    if (enemy.IsBoss && enemy.Health < enemy.MaxHealth / 2)
+                    {
+                        SpawnEnemyProjectile(enemy);
+                    }
+                }
+
                 bool hit = false;
                 for (int j = _torpedoes.Count - 1; j >= 0; j--)
                 {
-                    float hitRadius = enemy.IsBoss ? 50 : 30;
-                    if (Vector2.Distance(enemy.Position, _torpedoes[j]) < hitRadius)
+                    if (Vector2.Distance(enemy.Position, _torpedoes[j].Position) < (enemy.IsBoss ? 54 : enemy.Type == EnemyType.Bomber ? 34 : 28))
                     {
                         hit = true;
-                        _score += 100;
+                        _score += 25 * _comboMultiplier;
                         _torpedoes.RemoveAt(j);
                         break;
                     }
@@ -369,47 +706,53 @@ public class Game1 : Game
 
                 if (hit)
                 {
-                    enemy.Health -= 20;
-                    if (enemy.Health <= 0)
-                    {
-                        _missionShipsDestroyed++;
-                        if (enemy.IsBoss) 
-                        {
-                            _score += 1000;
-                            _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 2.0f, MaxRadius = 1200f });
-                            _screenShakeTimer = 1.5f;
-                            _screenShakeMagnitude = 25f;
-                        }
-                        else
-                        {
-                            _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 1.0f, MaxRadius = 400f });
-                            _screenShakeTimer = 0.3f;
-                            _screenShakeMagnitude = 5f;
-                        }
-                        _enemies.RemoveAt(i);
-                    }
+                    enemy.Health -= GetShipStats(_playerShip).Damage;
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, enemy.IsBoss ? 0.45f : 0.16f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, enemy.IsBoss ? 9f : 3f);
                 }
-                else if (enemy.Position.Y > 600 || Vector2.Distance(enemy.Position, _playerPos) < (enemy.IsBoss ? 70 : 40))
+
+                if (hit && enemy.Health <= 0)
                 {
-                    // Enemy escaped or hit player, take shield damage
-                    int dmg = enemy.IsBoss ? 50 : 20;
+                    _missionShipsDestroyed++;
+                    _comboTimer = 2.2f;
+                    _comboMultiplier = Math.Min(6, _comboMultiplier + 1);
+                    _score += enemy.IsBoss ? 1200 * _comboMultiplier : 120 * _comboMultiplier;
+                    _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = enemy.IsBoss ? 2.0f : 1.0f, MaxRadius = enemy.IsBoss ? 1100f : 420f });
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, enemy.IsBoss ? 1.25f : 0.3f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, enemy.IsBoss ? 24f : 5f);
+                    if (_rng.NextDouble() < (enemy.IsBoss ? 1.0 : 0.35))
+                    {
+                        SpawnPowerUp(enemy.Position);
+                    }
+                    _enemies.RemoveAt(i);
+                    continue;
+                }
+
+                if (enemy.Position.Y > GraphicsDevice.Viewport.Height + 40)
+                {
+                    _missionShipsEscaped++;
+                    _enemies.RemoveAt(i);
+                    continue;
+                }
+
+                if (_playerShields > 0 && Vector2.Distance(enemy.Position, _playerPos) < (enemy.IsBoss ? 76 : enemy.Type == EnemyType.Bomber ? 46 : 38))
+                {
+                    int dmg = enemy.IsBoss ? 55 : enemy.Type == EnemyType.Bomber ? 24 : 18;
                     _playerShields -= dmg;
                     _missionDamageTaken += dmg;
-
-                    if (enemy.Position.Y > 600)
-                        _missionShipsEscaped++;
-                    else
-                        _missionShipsDestroyed++; // Crashed into player => destroyed
-
+                    _missionShipsDestroyed++;
+                    _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 0.85f, MaxRadius = 240f });
                     _enemies.RemoveAt(i);
+                    continue;
                 }
+
+                _enemies[i] = enemy;
             }
 
-            // Update Explosions
             for (int i = _explosions.Count - 1; i >= 0; i--)
             {
                 var exp = _explosions[i];
-                exp.Timer += (float)gameTime.ElapsedGameTime.TotalSeconds;
+                exp.Timer += dt;
                 if (exp.Timer >= exp.Duration)
                 {
                     _explosions.RemoveAt(i);
@@ -420,9 +763,18 @@ public class Game1 : Game
                 }
             }
 
+            if (_comboTimer > 0f)
+            {
+                _comboTimer -= dt;
+                if (_comboTimer <= 0f)
+                {
+                    _comboMultiplier = 1;
+                }
+            }
+
             if (_screenShakeTimer > 0)
             {
-                _screenShakeTimer -= (float)gameTime.ElapsedGameTime.TotalSeconds;
+                _screenShakeTimer -= dt;
                 _cameraOffset = new Vector2(
                     ((float)_rng.NextDouble() * 2 - 1) * _screenShakeMagnitude,
                     ((float)_rng.NextDouble() * 2 - 1) * _screenShakeMagnitude);
@@ -437,7 +789,7 @@ public class Game1 : Game
                 if (_playerShields <= 0)
                 {
                     _missionEnding = true;
-                    _missionEndTimer = 3.0f; // Give time to watch player explode
+                    _missionEndTimer = 3.0f;
                     _missionWon = false;
                     _explosions.Add(new Explosion { Position = _playerPos, Timer = 0f, Duration = 2.5f, MaxRadius = 1500f });
                     _screenShakeTimer = 2.5f;
@@ -446,51 +798,78 @@ public class Game1 : Game
                 else if (won)
                 {
                     _missionEnding = true;
-                    _missionEndTimer = 2.5f; // Give time to watch enemies explode
+                    _missionEndTimer = 2.5f;
                     _missionWon = true;
+                    _explosions.Add(new Explosion { Position = _playerPos, Timer = 0f, Duration = 0.7f, MaxRadius = 220f });
                 }
             }
             else
             {
-                _missionEndTimer -= (float)gameTime.ElapsedGameTime.TotalSeconds;
+                _missionEndTimer -= dt;
                 if (_missionEndTimer <= 0)
                 {
                     _missionEnding = false;
-                    _reportTimer = 1.0f; // 1-second delay before allowing dismiss
+                    _reportTimer = 0.9f;
                     _currentState = GameState.MissionReport;
                 }
             }
         }
         else if (_currentState == GameState.MissionReport)
         {
+            float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
             if (_reportTimer > 0)
-                _reportTimer -= (float)gameTime.ElapsedGameTime.TotalSeconds;
-
-            if (_reportTimer <= 0 && (kb.IsKeyDown(Keys.Space) || kb.IsKeyDown(Keys.Enter)))
             {
-                if (!_missionWon)
+                _reportTimer -= dt;
+            }
+
+            if (_reportTimer <= 0)
+            {
+                if (_missionWon)
+                {
+                    if (kb.IsKeyDown(Keys.D1) || kb.IsKeyDown(Keys.NumPad1) || kb.IsKeyDown(Keys.D2) || kb.IsKeyDown(Keys.NumPad2) || kb.IsKeyDown(Keys.D3) || kb.IsKeyDown(Keys.NumPad3))
+                    {
+                        if (kb.IsKeyDown(Keys.D1) || kb.IsKeyDown(Keys.NumPad1))
+                        {
+                            ApplyMissionReward(Keys.D1);
+                        }
+                        else if (kb.IsKeyDown(Keys.D2) || kb.IsKeyDown(Keys.NumPad2))
+                        {
+                            ApplyMissionReward(Keys.D2);
+                        }
+                        else
+                        {
+                            ApplyMissionReward(Keys.D3);
+                        }
+
+                        _dominionStrength -= 15;
+                        _missionsCompleted++;
+                        if (_missionsCompleted % 2 == 0 && (int)_playerShip < 6)
+                            _playerShip++;
+
+                        if (_dominionStrength <= 0)
+                        {
+                            _currentState = GameState.GameOverVictory;
+                        }
+                        else if (_federationStrength <= 0)
+                        {
+                            _currentState = GameState.GameOverDefeat;
+                        }
+                        else
+                        {
+                            _currentState = GameState.StrategicView;
+                        }
+                    }
+                }
+                else if (kb.IsKeyDown(Keys.Space) || kb.IsKeyDown(Keys.Enter))
                 {
                     _livesRemaining--;
-                    _federationStrength -= 20; // mission failed penalty
+                    _federationStrength -= 20;
                     _playerShip = ShipClass.Oberth;
 
                     if (_federationStrength <= 0 || _livesRemaining <= 0)
                         _currentState = GameState.GameOverDefeat;
                     else
                         _currentState = GameState.StrategicView;
-                }
-                else
-                {
-                    // Mission complete!
-                    _dominionStrength -= 15;
-                    _missionsCompleted++;
-                    if (_missionsCompleted % 2 == 0 && (int)_playerShip < 6)
-                        _playerShip++; // Promote ship class
-
-                    _currentState = GameState.StrategicView;
-
-                    if (_dominionStrength <= 0) _currentState = GameState.GameOverVictory;
-                    if (_federationStrength <= 0) _currentState = GameState.GameOverDefeat;
                 }
             }
         }
@@ -518,6 +897,7 @@ public class Game1 : Game
             }
 
             DrawText("STRATEGIC VIEW", 58, 24, Color.White, 4);
+            DrawText("NEXT MISSION " + GetMissionTypeLabel(_currentMissionType), 58, 60, Color.LightCyan, 3);
 
             int midY = GraphicsDevice.Viewport.Height / 2;
 
@@ -613,6 +993,11 @@ public class Game1 : Game
                     _spriteBatch.Draw(_pixel, new Rectangle(iconX, iconY + 8, 18, 18), active ? Color.Cyan : Color.DarkGray);
                 }
             }
+
+            if (_nextMissionWeaponBonus != WeaponMode.Standard)
+            {
+                DrawText("ARMORY UPGRADE READY", 490, GraphicsDevice.Viewport.Height - 52, Color.Yellow, 3);
+            }
         }
         else if (_currentState == GameState.TacticalMission)
         {
@@ -633,8 +1018,38 @@ public class Game1 : Game
             // Draw Score
             DrawNumber(_score, 20, 20, Color.Yellow);
 
+            DrawText(GetMissionTypeLabel(_currentMissionType), 115, 18, Color.White, 3);
+
+            if (_comboMultiplier > 1)
+            {
+                DrawText("COMBO", 20, 70, Color.Orange, 3);
+                DrawNumber(_comboMultiplier, 96, 66, Color.Orange, 4);
+            }
+
+            if (_rapidFireTimer > 0f)
+            {
+                DrawText("RAPID FIRE", 20, 98, Color.Cyan, 3);
+            }
+
+            DrawText("WEAPON " + GetWeaponModeLabel(GetEffectiveWeaponMode()), 20, 126, Color.LightGreen, 3);
+
             // Draw Shields
             _spriteBatch.Draw(_pixel, new Rectangle(20, 45, Math.Max(0, _playerShields) * 2, 10), Color.Cyan);
+
+            for (int i = 0; i < _powerUps.Count; i++)
+            {
+                var power = _powerUps[i];
+                Color powerColor = power.Type switch
+                {
+                    PowerUpType.Shield => Color.Cyan,
+                    PowerUpType.RapidFire => Color.Yellow,
+                    PowerUpType.SpreadShot => Color.Lime,
+                    _ => Color.Orange
+                };
+
+                _spriteBatch.Draw(_pixel, new Rectangle((int)power.Position.X - 10, (int)power.Position.Y - 10, 20, 20), powerColor);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)power.Position.X - 4, (int)power.Position.Y - 4, 8, 8), Color.White);
+            }
 
             // Draw Player
             if (_playerShields > 0)
@@ -675,15 +1090,15 @@ public class Game1 : Game
             // Draw Torpedoes (Photon Torpedoes)
             foreach(var torp in _torpedoes)
             {
-                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.X - 4, (int)torp.Y - 5, 8, 10), Color.OrangeRed);
-                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.X - 2, (int)torp.Y - 3, 4, 6), Color.LightYellow);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.Position.X - 4, (int)torp.Position.Y - 5, 8, 10), Color.OrangeRed);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)torp.Position.X - 2, (int)torp.Position.Y - 3, 4, 6), Color.LightYellow);
             }
 
             // Draw Enemy Projectiles (Dominion Polaron Beams)
             foreach(var proj in _enemyProjectiles)
             {
-                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.X - 2, (int)proj.Y - 10, 4, 20), Color.DarkMagenta);
-                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.X - 1, (int)proj.Y - 8, 2, 16), Color.Cyan);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.Position.X - 2, (int)proj.Position.Y - 10, 4, 20), Color.DarkMagenta);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.Position.X - 1, (int)proj.Position.Y - 8, 2, 16), Color.Cyan);
             }
 
             // Draw Explosions
@@ -736,6 +1151,11 @@ public class Game1 : Game
                     }
                 }
             }
+
+            if (_playerShields > 0 && !_missionEnding)
+            {
+                DrawText("HOLD SPACE TO FIRE", 520, GraphicsDevice.Viewport.Height - 46, Color.White, 2);
+            }
         }
         else if (_currentState == GameState.MissionReport)
         {
@@ -750,6 +1170,8 @@ public class Game1 : Game
 
             DrawText("LIVES REMAINING", 220, 210, Color.White, 4);
             DrawNumber(_livesRemaining, 500, 204, Color.Yellow, 8);
+
+            DrawText(_missionWon ? "CHOOSE REWARD" : "RETRY FROM STRATEGIC VIEW", 185, 270, Color.LightCyan, 3);
 
             int startX = 250;
             int startY = 150;
@@ -777,19 +1199,34 @@ public class Game1 : Game
 
             if (_reportTimer <= 0)
             {
-                _spriteBatch.Draw(_pixel, new Rectangle(145, 420, 410, 44), Color.Black * 0.75f);
-                _spriteBatch.Draw(_pixel, new Rectangle(145, 420, 410, 4), Color.Cyan);
-                _spriteBatch.Draw(_pixel, new Rectangle(145, 460, 410, 4), Color.OrangeRed);
-                DrawText("PRESS SPACE OR ENTER", 158, 428, Color.White, 5);
+                _spriteBatch.Draw(_pixel, new Rectangle(120, 405, 460, 86), Color.Black * 0.75f);
+                _spriteBatch.Draw(_pixel, new Rectangle(120, 405, 460, 4), Color.Cyan);
+                _spriteBatch.Draw(_pixel, new Rectangle(120, 487, 460, 4), Color.OrangeRed);
+
+                if (_missionWon)
+                {
+                    DrawText("ONE REPAIR   TWO ARMORY   THREE INTEL", 140, 420, Color.White, 3);
+                    DrawText("RESTORE LIVES AND FLEET", 140, 450, Color.Cyan, 2);
+                    DrawText("NEXT MISSION SPREAD SHOT", 140, 468, Color.Yellow, 2);
+                    DrawText("NEXT MISSION FEWER ENEMIES", 140, 484, Color.LightGreen, 2);
+                }
+                else
+                {
+                    DrawText("PRESS SPACE OR ENTER TO CONTINUE", 140, 435, Color.White, 4);
+                }
             }
         }
         else if (_currentState == GameState.GameOverVictory)
         {
-            _spriteBatch.Draw(_pixel, new Rectangle(200, 200, 400, 200), Color.LimeGreen);
+            _spriteBatch.Draw(_pixel, new Rectangle(170, 180, 460, 220), Color.DarkGreen * 0.95f);
+            DrawText("VICTORY", 285, 230, Color.White, 6);
+            DrawText("FEDERATION WINS THE WAR", 190, 300, Color.LightGreen, 3);
         }
         else if (_currentState == GameState.GameOverDefeat)
         {
-            _spriteBatch.Draw(_pixel, new Rectangle(200, 200, 400, 200), Color.DarkRed);
+            _spriteBatch.Draw(_pixel, new Rectangle(170, 180, 460, 220), Color.DarkRed * 0.95f);
+            DrawText("DEFEAT", 300, 230, Color.White, 6);
+            DrawText("THE DOMINION PRESSES THE ADVANTAGE", 155, 300, Color.OrangeRed, 3);
         }
 
         _spriteBatch.End();
@@ -891,5 +1328,21 @@ public class Game1 : Game
         return new Rectangle((int)_playerPos.X - width / 2, (int)_playerPos.Y - height / 2, width, height);
     }
 
-    private static Rectangle GetProjectileBounds(Vector2 projectile) => new Rectangle((int)projectile.X - 2, (int)projectile.Y - 10, 4, 20);
+    private static string GetMissionTypeLabel(MissionType missionType) => missionType switch
+    {
+        MissionType.Assault => "ASSAULT",
+        MissionType.HoldTheLine => "HOLD THE LINE",
+        MissionType.BossHunt => "BOSS HUNT",
+        _ => "ASSAULT"
+    };
+
+    private static string GetWeaponModeLabel(WeaponMode weaponMode) => weaponMode switch
+    {
+        WeaponMode.Standard => "STANDARD",
+        WeaponMode.Twin => "TWIN",
+        WeaponMode.Spread => "SPREAD",
+        _ => "STANDARD"
+    };
+
+    private static Rectangle GetProjectileBounds(Projectile projectile) => new Rectangle((int)projectile.Position.X - 4, (int)projectile.Position.Y - 8, 8, 16);
 }
