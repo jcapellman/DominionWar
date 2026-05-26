@@ -28,6 +28,7 @@ public class Game1 : Game
 
     enum EnemyType { Fighter, Interceptor, Bomber, Phantom, Dreadnought }
     enum MissionType { Assault, HoldTheLine, BossHunt }
+    enum MissionModifier { None, NebulaInterference, ShieldDrain, AsteroidStorm }
     enum PowerUpType { Shield, RapidFire, SpreadShot, ScoreBoost }
     enum WeaponMode { Standard, Twin, Spread }
 
@@ -115,6 +116,21 @@ public class Game1 : Game
         public bool IsBoss => Type == EnemyType.Dreadnought;
     }
 
+    enum AchievementType { FirstBlood, ComboMaster, AcePilot, DreadnoughtDown }
+
+    private class Achievement
+    {
+        public AchievementType Type;
+        public string Title;
+        public bool Unlocked;
+
+        public Achievement(AchievementType type, string title)
+        {
+            Type = type;
+            Title = title;
+        }
+    }
+
     // Game States
     enum GameState { StrategicView, TacticalMission, MissionReport, GameOverVictory, GameOverDefeat }
     private GameState _currentState = GameState.StrategicView;
@@ -184,6 +200,10 @@ public class Game1 : Game
     private bool _missionWon = false;
     private float _playerInvincibleTimer = 0f;
     private bool _bossPhaseTwo = false;
+    private bool _bossPhaseThree = false;
+    private MissionModifier _missionModifier = MissionModifier.None;
+    private float _missionModifierTimer = 0f;
+    private float _missionModifierSpawnTimer = 0f;
 
     // Camera/Effects
     private Vector2 _cameraOffset = Vector2.Zero;
@@ -195,6 +215,15 @@ public class Game1 : Game
     private int _missionShipsEscaped = 0;
     private int _missionDamageTaken = 0;
     private float _reportTimer = 0f;
+    private float _achievementPopupTimer = 0f;
+    private string? _achievementPopupText;
+    private readonly List<Achievement> _achievements = new List<Achievement>
+    {
+        new Achievement(AchievementType.FirstBlood, "FIRST BLOOD"),
+        new Achievement(AchievementType.ComboMaster, "COMBO MASTER"),
+        new Achievement(AchievementType.AcePilot, "ACE PILOT"),
+        new Achievement(AchievementType.DreadnoughtDown, "DREADNOUGHT DOWN")
+    };
 
     [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
@@ -429,6 +458,29 @@ public class Game1 : Game
 
     private WeaponMode GetEffectiveWeaponMode() => _missionWeaponBonus != WeaponMode.Standard ? _missionWeaponBonus : GetShipStats(_playerShip).DefaultWeaponMode;
 
+    private MissionModifier RollMissionModifier()
+    {
+        if (_currentMissionType == MissionType.BossHunt && _rng.NextDouble() < 0.35)
+        {
+            return MissionModifier.None;
+        }
+
+        return (MissionModifier)_rng.Next(0, 4);
+    }
+
+    private void UnlockAchievement(AchievementType type)
+    {
+        var achievement = _achievements.Find(candidate => candidate.Type == type);
+        if (achievement == null || achievement.Unlocked)
+        {
+            return;
+        }
+
+        achievement.Unlocked = true;
+        _achievementPopupText = "ACHIEVEMENT " + achievement.Title;
+        _achievementPopupTimer = 2.8f;
+    }
+
     private void StartMission()
     {
         var stats = GetShipStats(_playerShip);
@@ -471,6 +523,10 @@ public class Game1 : Game
         _nextMissionWeaponBonus = WeaponMode.Standard;
         _playerInvincibleTimer = 0f;
         _bossPhaseTwo = false;
+        _bossPhaseThree = false;
+        _missionModifier = RollMissionModifier();
+        _missionModifierTimer = 0f;
+        _missionModifierSpawnTimer = 0f;
 
         int enemyCount = Math.Max(6, 10 + (_missionsCompleted * 4) + _rng.Next(0, 8) + _nextMissionEnemyModifier);
         _nextMissionEnemyModifier = 0;
@@ -593,6 +649,11 @@ public class Game1 : Game
             cooldown *= 0.5f;
         }
 
+        if (_missionModifier == MissionModifier.NebulaInterference)
+        {
+            cooldown *= 1.25f;
+        }
+
         float startOffset = -((shotCount - 1) * spread) * 0.5f;
         for (int i = 0; i < shotCount; i++)
         {
@@ -641,6 +702,19 @@ public class Game1 : Game
             if (enemy.RightPodHealth > 0)
             {
                 _enemyProjectiles.Add(new Projectile { Position = enemy.Position + new Vector2(40, 10), Velocity = new Vector2(50, 300), Damage = 15, Radius = 6f, IsEnemy = true });
+            }
+
+            if (_bossPhaseTwo)
+            {
+                _enemyProjectiles.Add(new Projectile { Position = enemy.Position + new Vector2(-20, 20), Velocity = new Vector2(-140, 340), Damage = 18, Radius = 6f, IsEnemy = true });
+                _enemyProjectiles.Add(new Projectile { Position = enemy.Position + new Vector2(20, 20), Velocity = new Vector2(140, 340), Damage = 18, Radius = 6f, IsEnemy = true });
+            }
+
+            if (_bossPhaseThree)
+            {
+                _enemyProjectiles.Add(new Projectile { Position = enemy.Position + new Vector2(-30, 15), Velocity = new Vector2(-220, 380), Damage = 22, Radius = 7f, IsEnemy = true });
+                _enemyProjectiles.Add(new Projectile { Position = enemy.Position + new Vector2(0, 15), Velocity = new Vector2(0, 400), Damage = 22, Radius = 7f, IsEnemy = true });
+                _enemyProjectiles.Add(new Projectile { Position = enemy.Position + new Vector2(30, 15), Velocity = new Vector2(220, 380), Damage = 22, Radius = 7f, IsEnemy = true });
             }
         }
         else
@@ -693,6 +767,12 @@ public class Game1 : Game
     protected override void Update(GameTime gameTime)
     {
         EnsureFullscreenResolution();
+
+        float frameDt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+        if (_achievementPopupTimer > 0f)
+        {
+            _achievementPopupTimer = Math.Max(0f, _achievementPopupTimer - frameDt);
+        }
 
         var kb = Keyboard.GetState();
         if (kb.IsKeyDown(Keys.F11) && !_previousKeyboardState.IsKeyDown(Keys.F11))
@@ -770,7 +850,7 @@ public class Game1 : Game
         else if (_currentState == GameState.TacticalMission)
         {
             var stats = GetShipStats(_playerShip);
-            float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            float dt = frameDt;
 
             if (_rapidFireTimer > 0f)
             {
@@ -780,6 +860,38 @@ public class Game1 : Game
             if (_playerInvincibleTimer > 0f)
             {
                 _playerInvincibleTimer -= dt;
+            }
+
+            if (_missionModifier == MissionModifier.ShieldDrain && _playerShields > 0 && !_missionEnding)
+            {
+                _missionModifierTimer += dt;
+                if (_missionModifierTimer >= 1f)
+                {
+                    int ticks = (int)_missionModifierTimer;
+                    _missionModifierTimer -= ticks;
+                    int drain = 2 * ticks;
+                    _playerShields = Math.Max(0, _playerShields - drain);
+                    _missionDamageTaken += drain;
+                }
+            }
+            else if (_missionModifier == MissionModifier.AsteroidStorm)
+            {
+                _missionModifierSpawnTimer += dt;
+                if (_missionModifierSpawnTimer >= 1.6f)
+                {
+                    _missionModifierSpawnTimer = 0f;
+                    if (_asteroids.Count < 16)
+                    {
+                        _asteroids.Add(new Asteroid
+                        {
+                            Position = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(-900, -100)),
+                            Velocity = new Vector2((float)(_rng.NextDouble() * 60 - 30), (float)(_rng.NextDouble() * 140 + 80)),
+                            Radius = (float)(_rng.NextDouble() * 18 + 18),
+                            Rotation = (float)(_rng.NextDouble() * MathHelper.TwoPi),
+                            RotationSpeed = (float)(_rng.NextDouble() * 2 - 1)
+                        });
+                    }
+                }
             }
 
             if (_dashCooldown > 0f) _dashCooldown -= dt;
@@ -1016,6 +1128,16 @@ public class Game1 : Game
                     _ => 150f + Math.Min(120f, _missionsCompleted * 8f)
                 };
 
+                if (enemy.IsBoss && _bossPhaseTwo)
+                {
+                    enemySpeed += 12f;
+                }
+
+                if (enemy.IsBoss && _bossPhaseThree)
+                {
+                    enemySpeed += 24f;
+                }
+
                 enemy.Phase += dt * (enemy.IsBoss ? 2.5f : 3.5f);
                 if (enemy.Type == EnemyType.Fighter || enemy.Type == EnemyType.Phantom)
                 {
@@ -1107,12 +1229,24 @@ public class Game1 : Game
                 if ((hit || enemy.Health <=0) && enemy.Health <= 0)
                 {
                     _missionShipsDestroyed++;
+                    if (_missionShipsDestroyed == 1)
+                    {
+                        UnlockAchievement(AchievementType.FirstBlood);
+                    }
                     _comboTimer = 2.2f;
                     _comboMultiplier = Math.Min(6, _comboMultiplier + 1);
+                    if (_comboMultiplier >= 5)
+                    {
+                        UnlockAchievement(AchievementType.ComboMaster);
+                    }
                     _score += enemy.IsBoss ? 1200 * _comboMultiplier : 120 * _comboMultiplier;
                     _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = enemy.IsBoss ? 2.0f : 1.0f, MaxRadius = enemy.IsBoss ? 1100f : 420f });
                     _screenShakeTimer = Math.Max(_screenShakeTimer, enemy.IsBoss ? 1.25f : 0.3f);
                     _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, enemy.IsBoss ? 24f : 5f);
+                    if (enemy.IsBoss)
+                    {
+                        UnlockAchievement(AchievementType.DreadnoughtDown);
+                    }
                     if (_rng.NextDouble() < (enemy.IsBoss ? 1.0 : 0.35))
                     {
                         SpawnPowerUp(enemy.Position);
@@ -1148,6 +1282,15 @@ public class Game1 : Game
                     _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 14f);
                     _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 1.2f, MaxRadius = 600f });
                     enemy.FireInterval = Math.Max(0.2f, enemy.FireInterval * 0.55f);
+                }
+
+                if (enemy.IsBoss && !_bossPhaseThree && enemy.Health < enemy.MaxHealth * 0.25f)
+                {
+                    _bossPhaseThree = true;
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 1.2f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 18f);
+                    _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 1.4f, MaxRadius = 750f });
+                    enemy.FireInterval = Math.Max(0.16f, enemy.FireInterval * 0.6f);
                 }
 
                 _enemies[i] = enemy;
@@ -1201,6 +1344,10 @@ public class Game1 : Game
                 }
                 else if (won)
                 {
+                    if (_missionDamageTaken <= 0)
+                    {
+                        UnlockAchievement(AchievementType.AcePilot);
+                    }
                     _missionEnding = true;
                     _missionEndTimer = 2.5f;
                     _missionWon = true;
@@ -1220,7 +1367,7 @@ public class Game1 : Game
         }
         else if (_currentState == GameState.MissionReport)
         {
-            float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+            float dt = frameDt;
             if (_reportTimer > 0)
             {
                 _reportTimer -= dt;
@@ -1409,6 +1556,15 @@ public class Game1 : Game
             DrawText("SCORE", 20, 20, Color.White, 3);
             DrawNumber(_score, 110, 15, Color.Yellow, 4);
 
+            DrawText("ACHIEVEMENTS", 490, ScreenHeight - 132, Color.White, 2);
+            int achievementY = ScreenHeight - 112;
+            foreach (var achievement in _achievements)
+            {
+                Color achievementColor = achievement.Unlocked ? Color.LimeGreen : Color.Gray;
+                DrawText(achievement.Title, 490, achievementY, achievementColor, 2);
+                achievementY += 16;
+            }
+
             if ((int)_playerShip < 6)
             {
                 DrawText("PRESS U TO UPGRADE SHIP 1000 SCORE", 490, ScreenHeight - 92, _score >= 1000 ? Color.Cyan : Color.Gray, 2);
@@ -1449,6 +1605,11 @@ public class Game1 : Game
             }
 
             DrawText("WEAPON " + GetWeaponModeLabel(GetEffectiveWeaponMode()), 20, 126, Color.LightGreen, 3);
+
+            if (_missionModifier != MissionModifier.None)
+            {
+                DrawText("MODIFIER " + GetMissionModifierLabel(_missionModifier), 20, 154, Color.Orange, 2);
+            }
 
             // Draw Shields
             var stats2 = GetShipStats(_playerShip);
@@ -1592,6 +1753,11 @@ public class Game1 : Game
                     float glowPulse = 0.4f + 0.6f * (float)Math.Abs(Math.Sin(gameTime.TotalGameTime.TotalSeconds * 5f));
                     _spriteBatch.Draw(_particleTexture, enemy.Position, null, Color.OrangeRed * glowPulse, 0f, new Vector2(16, 16), 6f, SpriteEffects.None, 0f);
                 }
+                if (enemy.IsBoss && _bossPhaseThree)
+                {
+                    float glowPulse = 0.5f + 0.5f * (float)Math.Abs(Math.Sin(gameTime.TotalGameTime.TotalSeconds * 6f));
+                    _spriteBatch.Draw(_particleTexture, enemy.Position, null, Color.Gold * glowPulse, 0f, new Vector2(16, 16), 8f, SpriteEffects.None, 0f);
+                }
                 if (enemy.IsBoss)
                 {
                     if (_jemHadarBattleshipTexture != null)
@@ -1633,6 +1799,11 @@ public class Game1 : Game
             {
                 float warningPulse = 0.6f + 0.4f * (float)Math.Abs(Math.Sin(gameTime.TotalGameTime.TotalSeconds * 4f));
                 DrawText("PHASE TWO!", ScreenWidth / 2 - 60, 8, Color.OrangeRed * warningPulse, 3);
+            }
+            if (_bossPhaseThree)
+            {
+                float warningPulse = 0.6f + 0.4f * (float)Math.Abs(Math.Sin(gameTime.TotalGameTime.TotalSeconds * 5f));
+                DrawText("PHASE THREE!", ScreenWidth / 2 - 70, 32, Color.Gold * warningPulse, 3);
             }
         }
         else if (_currentState == GameState.MissionReport)
@@ -1710,6 +1881,11 @@ public class Game1 : Game
             _spriteBatch.Draw(_pixel, new Rectangle(170, 180, 460, 220), Color.DarkRed * 0.95f);
             DrawText("DEFEAT", 300, 230, Color.White, 6);
             DrawText("THE DOMINION PRESSES THE ADVANTAGE", 155, 300, Color.OrangeRed, 3);
+        }
+
+        if (_achievementPopupTimer > 0f && !string.IsNullOrWhiteSpace(_achievementPopupText))
+        {
+            DrawText(_achievementPopupText, 40, ScreenHeight - 40, Color.Yellow, 3);
         }
 
         _spriteBatch.End();
@@ -1847,6 +2023,14 @@ public class Game1 : Game
         WeaponMode.Twin => "TWIN",
         WeaponMode.Spread => "SPREAD",
         _ => "STANDARD"
+    };
+
+    private static string GetMissionModifierLabel(MissionModifier missionModifier) => missionModifier switch
+    {
+        MissionModifier.NebulaInterference => "NEBULA INTERFERENCE",
+        MissionModifier.ShieldDrain => "SHIELD DRAIN",
+        MissionModifier.AsteroidStorm => "ASTEROID STORM",
+        _ => "NONE"
     };
 
     private static Rectangle GetProjectileBounds(Projectile projectile) => new Rectangle((int)projectile.Position.X - 4, (int)projectile.Position.Y - 8, 8, 16);
