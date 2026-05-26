@@ -14,6 +14,7 @@ public class Game1 : Game
     private Texture2D _pixel;
     private Texture2D _particleTexture;
     private Texture2D _planetTexture;
+    private Texture2D _asteroidTexture;
     private Texture2D _oberthTexture;
     private Texture2D _jemHadarFighterTexture;
     private Texture2D _jemHadarBattleshipTexture;
@@ -397,6 +398,8 @@ public class Game1 : Game
         }
         _planetTexture.SetData(pData2);
 
+        _asteroidTexture = GenerateAsteroidTexture(64, 64);
+
         // Populate Nebulae and Planets
         for (int i = 0; i < 15; i++)
         {
@@ -457,6 +460,101 @@ public class Game1 : Game
     };
 
     private WeaponMode GetEffectiveWeaponMode() => _missionWeaponBonus != WeaponMode.Standard ? _missionWeaponBonus : GetShipStats(_playerShip).DefaultWeaponMode;
+
+    private Texture2D GenerateAsteroidTexture(int width, int height)
+    {
+        var texture = new Texture2D(GraphicsDevice, width, height);
+        var data = new Color[width * height];
+        var center = new Vector2(width / 2f, height / 2f);
+        float baseRadius = Math.Min(width, height) * 0.42f;
+        int samples = 64;
+        float[] radiusOffsets = new float[samples];
+        var noiseRng = new Random(42);
+
+        for (int i = 0; i < samples; i++)
+        {
+            radiusOffsets[i] = baseRadius + (float)(noiseRng.NextDouble() * 10 - 5);
+        }
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                var pos = new Vector2(x + 0.5f, y + 0.5f);
+                float dist = Vector2.Distance(center, pos);
+                float angle = (float)Math.Atan2(pos.Y - center.Y, pos.X - center.X);
+                if (angle < 0)
+                {
+                    angle += MathHelper.TwoPi;
+                }
+
+                int index = (int)(angle / MathHelper.TwoPi * samples) % samples;
+                float radius = radiusOffsets[index];
+
+                if (dist <= radius)
+                {
+                    float shade = MathHelper.Clamp(1f - dist / (radius * 1.2f), 0.2f, 1f);
+                    float crater = (float)(Math.Sin(angle * 4f) * 0.08f + Math.Cos(dist * 0.35f) * 0.05f);
+                    shade = MathHelper.Clamp(shade + crater, 0.15f, 1f);
+                    data[y * width + x] = new Color(shade, shade * 0.95f, shade * 0.9f, 1f);
+                }
+                else
+                {
+                    data[y * width + x] = Color.Transparent;
+                }
+            }
+        }
+
+        texture.SetData(data);
+        return texture;
+    }
+
+    private void AddAsteroid(Vector2 position, Vector2 velocity, float radius)
+    {
+        _asteroids.Add(new Asteroid
+        {
+            Position = position,
+            Velocity = velocity,
+            Radius = radius,
+            Rotation = (float)(_rng.NextDouble() * MathHelper.TwoPi),
+            RotationSpeed = (float)(_rng.NextDouble() * 2 - 1)
+        });
+    }
+
+    private void GenerateAsteroidField(int count, int minY, int maxY)
+    {
+        int clusters = Math.Max(2, count / 3);
+        int remaining = count;
+
+        for (int c = 0; c < clusters; c++)
+        {
+            int clusterSize = c == clusters - 1 ? remaining : Math.Max(1, count / clusters + _rng.Next(-1, 2));
+            remaining -= clusterSize;
+
+            var center = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(minY, maxY));
+            float baseSpeed = (float)(_rng.NextDouble() * 80 + 60);
+
+            for (int i = 0; i < clusterSize; i++)
+            {
+                Vector2 offset = new Vector2(_rng.Next(-120, 120), _rng.Next(-180, 180));
+                float radius = (float)(_rng.NextDouble() * 20 + 14);
+                Vector2 velocity = new Vector2((float)(_rng.NextDouble() * 50 - 25), baseSpeed + (float)(_rng.NextDouble() * 80));
+                AddAsteroid(center + offset, velocity, radius);
+            }
+        }
+    }
+
+    private void SpawnAsteroidCluster(int count, int minY, int maxY, float speedScale)
+    {
+        var center = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(minY, maxY));
+        for (int i = 0; i < count; i++)
+        {
+            Vector2 offset = new Vector2(_rng.Next(-80, 80), _rng.Next(-120, 120));
+            float radius = (float)(_rng.NextDouble() * 18 + 16);
+            Vector2 velocity = new Vector2((float)(_rng.NextDouble() * 70 - 35), (float)(_rng.NextDouble() * 140 + 90) * speedScale);
+            AddAsteroid(center + offset, velocity, radius);
+        }
+    }
 
     private MissionModifier RollMissionModifier()
     {
@@ -531,16 +629,7 @@ public class Game1 : Game
         int enemyCount = Math.Max(6, 10 + (_missionsCompleted * 4) + _rng.Next(0, 8) + _nextMissionEnemyModifier);
         _nextMissionEnemyModifier = 0;
 
-        for (int i = 0; i < _missionsCompleted + 2; i++)
-        {
-            _asteroids.Add(new Asteroid {
-                Position = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(-1000, -100)),
-                Velocity = new Vector2((float)(_rng.NextDouble() * 40 - 20), (float)(_rng.NextDouble() * 100 + 50)),
-                Radius = (float)(_rng.NextDouble() * 20 + 15),
-                Rotation = (float)(_rng.NextDouble() * MathHelper.TwoPi),
-                RotationSpeed = (float)(_rng.NextDouble() * 2 - 1)
-            });
-        }
+        GenerateAsteroidField(_missionsCompleted + 2, -1000, -100);
 
         if (_currentMissionType == MissionType.BossHunt)
         {
@@ -882,14 +971,7 @@ public class Game1 : Game
                     _missionModifierSpawnTimer = 0f;
                     if (_asteroids.Count < 16)
                     {
-                        _asteroids.Add(new Asteroid
-                        {
-                            Position = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(-900, -100)),
-                            Velocity = new Vector2((float)(_rng.NextDouble() * 60 - 30), (float)(_rng.NextDouble() * 140 + 80)),
-                            Radius = (float)(_rng.NextDouble() * 18 + 18),
-                            Rotation = (float)(_rng.NextDouble() * MathHelper.TwoPi),
-                            RotationSpeed = (float)(_rng.NextDouble() * 2 - 1)
-                        });
+                        SpawnAsteroidCluster(2 + _rng.Next(3), -900, -120, 1.15f);
                     }
                 }
             }
@@ -1723,8 +1805,8 @@ public class Game1 : Game
             // Draw Asteroids
             foreach (var ast in _asteroids)
             {
-                // We'll reuse the procedural planet texture and tint it gray
-                _spriteBatch.Draw(_planetTexture, ast.Position, null, Color.DarkGray, ast.Rotation, new Vector2(32, 32), ast.Radius / 32f, SpriteEffects.None, 0f);
+                var asteroidTex = _asteroidTexture ?? _planetTexture;
+                _spriteBatch.Draw(asteroidTex, ast.Position, null, Color.DarkGray, ast.Rotation, new Vector2(32, 32), ast.Radius / 32f, SpriteEffects.None, 0f);
             }
 
             // Draw Enemies (JemHadar/Breen/Cardassian represented as pink/purple boxes)
