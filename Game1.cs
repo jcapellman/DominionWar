@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
@@ -23,6 +24,7 @@ public class Game1 : Game
     private Texture2D _strategicBackground;
     private Texture2D _federationLogo;
     private Texture2D _dominionLogo;
+    private RenderTarget2D _sceneTarget;
 
     enum EnemyType { Fighter, Interceptor, Bomber, Dreadnought }
     enum MissionType { Assault, HoldTheLine, BossHunt }
@@ -119,6 +121,9 @@ public class Game1 : Game
     private float _rapidFireTimer = 0f;
     private float _comboTimer = 0f;
     private int _comboMultiplier = 1;
+    private KeyboardState _previousKeyboardState;
+    private bool _isApplyingGraphicsChanges = false;
+    private bool _isFullscreenDesktop = true;
 
     private readonly int[,,] _font = new int[10, 5, 3] {
         { {1,1,1}, {1,0,1}, {1,0,1}, {1,0,1}, {1,1,1} },
@@ -156,16 +161,129 @@ public class Game1 : Game
     private int _missionDamageTaken = 0;
     private float _reportTimer = 0f;
 
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
+
+    private static int GetMonitorWidth() => Math.Max(1, GetSystemMetrics(0));
+    private static int GetMonitorHeight() => Math.Max(1, GetSystemMetrics(1));
+
+    private const int SceneWidth = 800;
+    private const int SceneHeight = 600;
+    private int ScreenWidth => SceneWidth;
+    private int ScreenHeight => SceneHeight;
+
     public Game1()
     {
         _graphics = new GraphicsDeviceManager(this);
+        _graphics.HardwareModeSwitch = false;
+        _graphics.PreferredBackBufferWidth = GetMonitorWidth();
+        _graphics.PreferredBackBufferHeight = GetMonitorHeight();
+        _graphics.IsFullScreen = false;
         Content.RootDirectory = "Content";
         IsMouseVisible = true;
+    }
+
+    private void ApplyFullscreenMode(bool fullscreen)
+    {
+        if (_isApplyingGraphicsChanges)
+        {
+            return;
+        }
+
+        _isApplyingGraphicsChanges = true;
+
+        _isFullscreenDesktop = fullscreen;
+        _graphics.IsFullScreen = false;
+        Window.IsBorderless = fullscreen;
+        Window.AllowUserResizing = !fullscreen;
+
+        if (fullscreen)
+        {
+            _graphics.PreferredBackBufferWidth = GetMonitorWidth();
+            _graphics.PreferredBackBufferHeight = GetMonitorHeight();
+            Window.Position = Point.Zero;
+            Window.AllowUserResizing = false;
+            Window.IsBorderless = true;
+        }
+        else
+        {
+            Window.IsBorderless = false;
+            Window.AllowUserResizing = true;
+            _graphics.PreferredBackBufferWidth = Math.Max(1, Window.ClientBounds.Width);
+            _graphics.PreferredBackBufferHeight = Math.Max(1, Window.ClientBounds.Height);
+        }
+
+        _graphics.ApplyChanges();
+        if (GraphicsDevice != null)
+        {
+            GraphicsDevice.Viewport = new Viewport(0, 0, _graphics.PreferredBackBufferWidth, _graphics.PreferredBackBufferHeight);
+        }
+
+        _isApplyingGraphicsChanges = false;
+    }
+
+    private void ToggleFullscreen()
+    {
+        ApplyFullscreenMode(!_isFullscreenDesktop);
+    }
+
+    private void SyncViewportToBackBuffer()
+    {
+        if (GraphicsDevice == null)
+        {
+            return;
+        }
+
+        int width = GraphicsDevice.PresentationParameters.BackBufferWidth;
+        int height = GraphicsDevice.PresentationParameters.BackBufferHeight;
+
+        if (width > 0 && height > 0 && (GraphicsDevice.Viewport.Width != width || GraphicsDevice.Viewport.Height != height))
+        {
+            GraphicsDevice.Viewport = new Viewport(0, 0, width, height);
+        }
+    }
+
+    private void EnsureFullscreenResolution()
+    {
+        if (!_isFullscreenDesktop || _isApplyingGraphicsChanges)
+        {
+            return;
+        }
+
+        int targetWidth = GetMonitorWidth();
+        int targetHeight = GetMonitorHeight();
+        if (_graphics.PreferredBackBufferWidth != targetWidth || _graphics.PreferredBackBufferHeight != targetHeight)
+        {
+            _isApplyingGraphicsChanges = true;
+            _graphics.PreferredBackBufferWidth = targetWidth;
+            _graphics.PreferredBackBufferHeight = targetHeight;
+            _graphics.ApplyChanges();
+            _isApplyingGraphicsChanges = false;
+        }
+
+        if (GraphicsDevice != null && (GraphicsDevice.Viewport.Width != targetWidth || GraphicsDevice.Viewport.Height != targetHeight))
+        {
+            GraphicsDevice.Viewport = new Viewport(0, 0, targetWidth, targetHeight);
+        }
     }
 
     protected override void Initialize()
     {
         // TODO: Add your initialization logic here
+
+        Window.ClientSizeChanged += (_, __) =>
+        {
+            if (!_isFullscreenDesktop && !_isApplyingGraphicsChanges)
+            {
+                _isApplyingGraphicsChanges = true;
+                _graphics.PreferredBackBufferWidth = Math.Max(1, Window.ClientBounds.Width);
+                _graphics.PreferredBackBufferHeight = Math.Max(1, Window.ClientBounds.Height);
+                _graphics.ApplyChanges();
+                _isApplyingGraphicsChanges = false;
+            }
+        };
+
+        ApplyFullscreenMode(true);
 
         base.Initialize();
     }
@@ -173,6 +291,7 @@ public class Game1 : Game
     protected override void LoadContent()
     {
         _spriteBatch = new SpriteBatch(GraphicsDevice);
+        _sceneTarget = new RenderTarget2D(GraphicsDevice, SceneWidth, SceneHeight, false, SurfaceFormat.Color, DepthFormat.None, 0, RenderTargetUsage.DiscardContents);
 
         _pixel = new Texture2D(GraphicsDevice, 1, 1);
         _pixel.SetData(new[] { Color.White });
@@ -218,7 +337,7 @@ public class Game1 : Game
         for (int i = 0; i < 15; i++)
         {
             _nebulae.Add(new BackgroundElement {
-                Position = new Vector2(_rng.Next(-200, 1000), _rng.Next(-200, 800)),
+                Position = new Vector2(_rng.Next(-200, ScreenWidth + 200), _rng.Next(-200, ScreenHeight + 200)),
                 Speed = (float)(_rng.NextDouble() * 10 + 5),
                 Color = (_rng.Next(2) == 0 ? Color.MediumVioletRed : Color.DarkBlue) * 0.3f,
                 Scale = (float)(_rng.NextDouble() * 15 + 10),
@@ -230,7 +349,7 @@ public class Game1 : Game
         for (int i = 0; i < 3; i++)
         {
             _planets.Add(new BackgroundElement {
-                Position = new Vector2(_rng.Next(0, 800), _rng.Next(-600, 800)),
+                Position = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(-ScreenHeight, ScreenHeight + 200)),
                 Speed = (float)(_rng.NextDouble() * 20 + 10),
                 Color = new Color((float)_rng.NextDouble()*0.6f+0.4f, (float)_rng.NextDouble()*0.6f+0.4f, (float)_rng.NextDouble()*0.6f+0.4f),
                 Scale = (float)(_rng.NextDouble() * 1.5f + 0.5f),
@@ -253,7 +372,7 @@ public class Game1 : Game
         {
             _stars.Add(new Star
             {
-                Position = new Vector2(_rng.Next(0, 800), _rng.Next(0, 600)),
+                Position = new Vector2(_rng.Next(0, ScreenWidth), _rng.Next(0, ScreenHeight)),
                 Speed = (float)(_rng.NextDouble() * 50 + 20),
                 Color = Color.Lerp(Color.White, Color.DarkGray, (float)_rng.NextDouble()),
                 Size = _rng.Next(1, 3)
@@ -285,7 +404,7 @@ public class Game1 : Game
             _ => MissionType.BossHunt
         };
 
-        _playerPos = new Vector2(400, 300);
+        _playerPos = new Vector2(ScreenWidth / 2f, ScreenHeight / 2f);
         _playerShields = stats.MaxShields;
         _enemies.Clear();
         _torpedoes.Clear();
@@ -501,8 +620,15 @@ public class Game1 : Game
 
     protected override void Update(GameTime gameTime)
     {
+        EnsureFullscreenResolution();
+
         var kb = Keyboard.GetState();
-        if (GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed || kb.IsKeyDown(Keys.Escape))
+        if (kb.IsKeyDown(Keys.F11) && !_previousKeyboardState.IsKeyDown(Keys.F11))
+        {
+            ToggleFullscreen();
+        }
+
+        if (GamePad.GetState(PlayerIndex.One).Buttons.Back == ButtonState.Pressed || (kb.IsKeyDown(Keys.Escape) && !_previousKeyboardState.IsKeyDown(Keys.Escape)))
             Exit();
 
         for (int i = 0; i < _stars.Count; i++)
@@ -875,10 +1001,14 @@ public class Game1 : Game
         }
 
         base.Update(gameTime);
+        _previousKeyboardState = kb;
     }
 
     protected override void Draw(GameTime gameTime)
     {
+        EnsureFullscreenResolution();
+        SyncViewportToBackBuffer();
+        GraphicsDevice.SetRenderTarget(_sceneTarget);
         GraphicsDevice.Clear(Color.Black);
 
         _spriteBatch.Begin(blendState: BlendState.NonPremultiplied, transformMatrix: Matrix.CreateTranslation(_cameraOffset.X, _cameraOffset.Y, 0));
@@ -1154,27 +1284,31 @@ public class Game1 : Game
 
             if (_playerShields > 0 && !_missionEnding)
             {
-                DrawText("HOLD SPACE TO FIRE", 520, GraphicsDevice.Viewport.Height - 46, Color.White, 2);
+                DrawText("HOLD SPACE TO FIRE", ScreenWidth - 260, ScreenHeight - 46, Color.White, 2);
             }
         }
         else if (_currentState == GameState.MissionReport)
         {
             // Background overlay
-            _spriteBatch.Draw(_pixel, new Rectangle(100, 100, 600, 400), Color.DarkBlue * 0.9f);
-            _spriteBatch.Draw(_pixel, new Rectangle(104, 104, 592, 392), Color.Black * 0.35f);
+            int panelX = ScreenWidth / 10;
+            int panelY = ScreenHeight / 10;
+            int panelW = ScreenWidth - (panelX * 2);
+            int panelH = ScreenHeight - (panelY * 2);
+            _spriteBatch.Draw(_pixel, new Rectangle(panelX, panelY, panelW, panelH), Color.DarkBlue * 0.9f);
+            _spriteBatch.Draw(_pixel, new Rectangle(panelX + 4, panelY + 4, panelW - 8, panelH - 8), Color.Black * 0.35f);
 
             string headline = _missionWon ? "MISSION SUCCESSFUL" : "MISSION FAILED";
             Color headlineColor = _missionWon ? Color.LimeGreen : Color.Red;
-            int headlineX = GraphicsDevice.Viewport.Width / 2 - (headline.Length * 4 * 5) / 2;
-            DrawText(headline, headlineX, 120, headlineColor, 5);
+            int headlineX = ScreenWidth / 2 - (headline.Length * 4 * 5) / 2;
+            DrawText(headline, headlineX, panelY + 20, headlineColor, 5);
 
-            DrawText("LIVES REMAINING", 220, 210, Color.White, 4);
-            DrawNumber(_livesRemaining, 500, 204, Color.Yellow, 8);
+            DrawText("LIVES REMAINING", panelX + 120, panelY + 110, Color.White, 4);
+            DrawNumber(_livesRemaining, panelX + 400, panelY + 104, Color.Yellow, 8);
 
-            DrawText(_missionWon ? "CHOOSE REWARD" : "RETRY FROM STRATEGIC VIEW", 185, 270, Color.LightCyan, 3);
+            DrawText(_missionWon ? "CHOOSE REWARD" : "RETRY FROM STRATEGIC VIEW", panelX + 100, panelY + 170, Color.LightCyan, 3);
 
-            int startX = 250;
-            int startY = 150;
+            int startX = panelX + 140;
+            int startY = panelY + 65;
             int spacingY = 90;
 
             // Destroyed
@@ -1199,20 +1333,21 @@ public class Game1 : Game
 
             if (_reportTimer <= 0)
             {
-                _spriteBatch.Draw(_pixel, new Rectangle(120, 405, 460, 86), Color.Black * 0.75f);
-                _spriteBatch.Draw(_pixel, new Rectangle(120, 405, 460, 4), Color.Cyan);
-                _spriteBatch.Draw(_pixel, new Rectangle(120, 487, 460, 4), Color.OrangeRed);
+                int promptY = panelY + panelH - 95;
+                _spriteBatch.Draw(_pixel, new Rectangle(panelX + 20, promptY, panelW - 40, 86), Color.Black * 0.75f);
+                _spriteBatch.Draw(_pixel, new Rectangle(panelX + 20, promptY, panelW - 40, 4), Color.Cyan);
+                _spriteBatch.Draw(_pixel, new Rectangle(panelX + 20, promptY + 82, panelW - 40, 4), Color.OrangeRed);
 
                 if (_missionWon)
                 {
-                    DrawText("ONE REPAIR   TWO ARMORY   THREE INTEL", 140, 420, Color.White, 3);
-                    DrawText("RESTORE LIVES AND FLEET", 140, 450, Color.Cyan, 2);
-                    DrawText("NEXT MISSION SPREAD SHOT", 140, 468, Color.Yellow, 2);
-                    DrawText("NEXT MISSION FEWER ENEMIES", 140, 484, Color.LightGreen, 2);
+                    DrawText("ONE REPAIR   TWO ARMORY   THREE INTEL", panelX + 40, promptY + 15, Color.White, 3);
+                    DrawText("RESTORE LIVES AND FLEET", panelX + 40, promptY + 45, Color.Cyan, 2);
+                    DrawText("NEXT MISSION SPREAD SHOT", panelX + 40, promptY + 63, Color.Yellow, 2);
+                    DrawText("NEXT MISSION FEWER ENEMIES", panelX + 40, promptY + 79, Color.LightGreen, 2);
                 }
                 else
                 {
-                    DrawText("PRESS SPACE OR ENTER TO CONTINUE", 140, 435, Color.White, 4);
+                    DrawText("PRESS SPACE OR ENTER TO CONTINUE", panelX + 40, promptY + 26, Color.White, 4);
                 }
             }
         }
@@ -1229,6 +1364,13 @@ public class Game1 : Game
             DrawText("THE DOMINION PRESSES THE ADVANTAGE", 155, 300, Color.OrangeRed, 3);
         }
 
+        _spriteBatch.End();
+
+        GraphicsDevice.SetRenderTarget(null);
+        GraphicsDevice.Clear(Color.Black);
+
+        _spriteBatch.Begin(samplerState: SamplerState.PointClamp, blendState: BlendState.Opaque);
+        _spriteBatch.Draw(_sceneTarget, new Rectangle(0, 0, GraphicsDevice.PresentationParameters.BackBufferWidth, GraphicsDevice.PresentationParameters.BackBufferHeight), Color.White);
         _spriteBatch.End();
 
         base.Draw(gameTime);
