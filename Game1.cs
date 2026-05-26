@@ -69,6 +69,7 @@ public class Game1 : Game
     enum ShipClass { Oberth, Constitution, Excelsior, Defiant, Akira, Galaxy, Sovereign }
     private ShipClass _playerShip = ShipClass.Oberth;
     private int _missionsCompleted = 0;
+    private int _livesRemaining = 3;
     private int _dominionStrength = 100;
     private int _federationStrength = 100;
     private int _score = 0;
@@ -329,7 +330,7 @@ public class Game1 : Game
                 {
                     _enemyProjectiles.RemoveAt(i);
                 }
-                else if (Vector2.Distance(_enemyProjectiles[i], _playerPos) < 30)
+                else if (_playerShields > 0 && GetPlayerBounds().Intersects(GetProjectileBounds(_enemyProjectiles[i])))
                 {
                     _playerShields -= 10;
                     _missionDamageTaken += 10;
@@ -469,9 +470,14 @@ public class Game1 : Game
             {
                 if (!_missionWon)
                 {
+                    _livesRemaining--;
                     _federationStrength -= 20; // mission failed penalty
-                    _currentState = GameState.StrategicView;
-                    if (_federationStrength <= 0) _currentState = GameState.GameOverDefeat;
+                    _playerShip = ShipClass.Oberth;
+
+                    if (_federationStrength <= 0 || _livesRemaining <= 0)
+                        _currentState = GameState.GameOverDefeat;
+                    else
+                        _currentState = GameState.StrategicView;
                 }
                 else
                 {
@@ -581,6 +587,31 @@ public class Game1 : Game
                 int promptX = GraphicsDevice.Viewport.Width / 2 - 180;
                 int promptY = GraphicsDevice.Viewport.Height - 102;
                 DrawText("PRESS ENTER TO START", promptX + 16, promptY + 5, Color.White, 4);
+            }
+
+            DrawText("LIVES", 70, GraphicsDevice.Viewport.Height - 52, Color.White, 3);
+            for (int i = 0; i < 3; i++)
+            {
+                int iconX = 150 + i * 42;
+                int iconY = GraphicsDevice.Viewport.Height - 62;
+                bool active = i < _livesRemaining;
+                Color iconColor = active ? Color.White : Color.Gray * 0.45f;
+                if (active && _livesRemaining == 1 && i == 0)
+                {
+                    float pulse = 0.75f + 0.25f * (float)Math.Sin(gameTime.TotalGameTime.TotalSeconds * 6f);
+                    iconColor *= pulse;
+                }
+                if (_oberthTexture != null)
+                {
+                    float scale = 32f / Math.Max(_oberthTexture.Width, _oberthTexture.Height);
+                    int w = (int)(_oberthTexture.Width * scale);
+                    int h = (int)(_oberthTexture.Height * scale);
+                    _spriteBatch.Draw(_oberthTexture, new Rectangle(iconX, iconY, w, h), iconColor);
+                }
+                else
+                {
+                    _spriteBatch.Draw(_pixel, new Rectangle(iconX, iconY + 8, 18, 18), active ? Color.Cyan : Color.DarkGray);
+                }
             }
         }
         else if (_currentState == GameState.TacticalMission)
@@ -712,6 +743,14 @@ public class Game1 : Game
             _spriteBatch.Draw(_pixel, new Rectangle(100, 100, 600, 400), Color.DarkBlue * 0.9f);
             _spriteBatch.Draw(_pixel, new Rectangle(104, 104, 592, 392), Color.Black * 0.35f);
 
+            string headline = _missionWon ? "MISSION SUCCESSFUL" : "MISSION FAILED";
+            Color headlineColor = _missionWon ? Color.LimeGreen : Color.Red;
+            int headlineX = GraphicsDevice.Viewport.Width / 2 - (headline.Length * 4 * 5) / 2;
+            DrawText(headline, headlineX, 120, headlineColor, 5);
+
+            DrawText("LIVES REMAINING", 220, 210, Color.White, 4);
+            DrawNumber(_livesRemaining, 500, 204, Color.Yellow, 8);
+
             int startX = 250;
             int startY = 150;
             int spacingY = 90;
@@ -823,4 +862,34 @@ public class Game1 : Game
             cursorX += scale * 4;
         }
     }
+
+    private Rectangle GetPlayerBounds()
+    {
+        int shipSize = 10 + (int)_playerShip * 3;
+        int width = shipSize;
+        int height = shipSize;
+
+        if (_playerShip == ShipClass.Oberth && _oberthTexture != null)
+        {
+            float scale = 64f / Math.Max(_oberthTexture.Width, _oberthTexture.Height);
+            width = (int)(_oberthTexture.Width * scale);
+            height = (int)(_oberthTexture.Height * scale);
+        }
+        else if (_playerShip == ShipClass.Constitution && _constitutionTexture != null)
+        {
+            float scale = 80f / Math.Max(_constitutionTexture.Width, _constitutionTexture.Height);
+            width = (int)(_constitutionTexture.Width * scale);
+            height = (int)(_constitutionTexture.Height * scale);
+        }
+        else if (_playerShip == ShipClass.Excelsior && _excelsiorTexture != null)
+        {
+            float scale = 96f / Math.Max(_excelsiorTexture.Width, _excelsiorTexture.Height);
+            width = (int)(_excelsiorTexture.Width * scale);
+            height = (int)(_excelsiorTexture.Height * scale);
+        }
+
+        return new Rectangle((int)_playerPos.X - width / 2, (int)_playerPos.Y - height / 2, width, height);
+    }
+
+    private static Rectangle GetProjectileBounds(Vector2 projectile) => new Rectangle((int)projectile.X - 2, (int)projectile.Y - 10, 4, 20);
 }
