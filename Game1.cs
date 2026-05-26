@@ -203,6 +203,7 @@ public class Game1 : Game
     private bool _bossPhaseTwo = false;
     private bool _bossPhaseThree = false;
     private MissionModifier _missionModifier = MissionModifier.None;
+    private MissionModifier _nextMissionModifier = MissionModifier.None;
     private float _missionModifierTimer = 0f;
     private float _missionModifierSpawnTimer = 0f;
 
@@ -566,6 +567,16 @@ public class Game1 : Game
         return (MissionModifier)_rng.Next(0, 4);
     }
 
+    private MissionModifier GetNextMissionModifier()
+    {
+        // Pre-compute next mission's modifier for display on strategic view
+        if (_currentMissionType == MissionType.BossHunt && _rng.NextDouble() < 0.35)
+        {
+            return MissionModifier.None;
+        }
+        return (MissionModifier)_rng.Next(0, 4);
+    }
+
     private void UnlockAchievement(AchievementType type)
     {
         var achievement = _achievements.Find(candidate => candidate.Type == type);
@@ -623,6 +634,7 @@ public class Game1 : Game
         _bossPhaseTwo = false;
         _bossPhaseThree = false;
         _missionModifier = RollMissionModifier();
+        _nextMissionModifier = GetNextMissionModifier();
         _missionModifierTimer = 0f;
         _missionModifierSpawnTimer = 0f;
 
@@ -1107,16 +1119,25 @@ public class Game1 : Game
                 }
 
                 bool hitAst = false;
+                int hitAsteroidIndex = -1;
                 for (int a = 0; a < _asteroids.Count; a++)
                 {
                     if (Vector2.Distance(_asteroids[a].Position, _torpedoes[i].Position) < _asteroids[a].Radius + _torpedoes[i].Radius)
                     {
                         hitAst = true;
+                        hitAsteroidIndex = a;
                         break;
                     }
                 }
                 if (hitAst) {
-                    _explosions.Add(new Explosion { Position = _torpedoes[i].Position, Timer = 0f, Duration = 0.2f, MaxRadius = 20f });
+                    var ast = _asteroids[hitAsteroidIndex];
+                    // Create explosion at asteroid position
+                    float explosionScale = MathHelper.Clamp(ast.Radius / 20f, 0.5f, 2f);
+                    _explosions.Add(new Explosion { Position = ast.Position, Timer = 0f, Duration = 0.4f, MaxRadius = 80f * explosionScale });
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 0.1f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, ast.Radius / 5f);
+                    _score += (int)(10 * explosionScale);
+                    _asteroids.RemoveAt(hitAsteroidIndex);
                     _torpedoes.RemoveAt(i);
                 }
             }
@@ -1299,13 +1320,13 @@ public class Game1 : Game
                 {
                     enemy.Health -= GetShipStats(_playerShip).Damage;
                     _screenShakeTimer = Math.Max(_screenShakeTimer, 0.16f);
-                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 3f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 2f);
                 }
                 else if (hit && enemy.IsBoss)
                 {
-                     enemy.Health -= GetShipStats(_playerShip).Damage / 2; // Reduced damage if hitting main body instead of targeted part destroying
-                    _screenShakeTimer = Math.Max(_screenShakeTimer, 0.45f);
-                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 9f);
+                     enemy.Health -= GetShipStats(_playerShip).Damage / 2;
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 0.30f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 4f);
                 }
 
                 if ((hit || enemy.Health <=0) && enemy.Health <= 0)
@@ -1323,8 +1344,8 @@ public class Game1 : Game
                     }
                     _score += enemy.IsBoss ? 1200 * _comboMultiplier : 120 * _comboMultiplier;
                     _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = enemy.IsBoss ? 2.0f : 1.0f, MaxRadius = enemy.IsBoss ? 1100f : 420f });
-                    _screenShakeTimer = Math.Max(_screenShakeTimer, enemy.IsBoss ? 1.25f : 0.3f);
-                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, enemy.IsBoss ? 24f : 5f);
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, enemy.IsBoss ? 0.6f : 0.2f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, enemy.IsBoss ? 12f : 3f);
                     if (enemy.IsBoss)
                     {
                         UnlockAchievement(AchievementType.DreadnoughtDown);
@@ -1360,8 +1381,8 @@ public class Game1 : Game
                 if (enemy.IsBoss && !_bossPhaseTwo && enemy.Health < enemy.MaxHealth / 2)
                 {
                     _bossPhaseTwo = true;
-                    _screenShakeTimer = Math.Max(_screenShakeTimer, 1.0f);
-                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 14f);
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 0.6f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 10f);
                     _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 1.2f, MaxRadius = 600f });
                     enemy.FireInterval = Math.Max(0.2f, enemy.FireInterval * 0.55f);
                 }
@@ -1369,8 +1390,8 @@ public class Game1 : Game
                 if (enemy.IsBoss && !_bossPhaseThree && enemy.Health < enemy.MaxHealth * 0.25f)
                 {
                     _bossPhaseThree = true;
-                    _screenShakeTimer = Math.Max(_screenShakeTimer, 1.2f);
-                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 18f);
+                    _screenShakeTimer = Math.Max(_screenShakeTimer, 0.7f);
+                    _screenShakeMagnitude = Math.Max(_screenShakeMagnitude, 12f);
                     _explosions.Add(new Explosion { Position = enemy.Position, Timer = 0f, Duration = 1.4f, MaxRadius = 750f });
                     enemy.FireInterval = Math.Max(0.16f, enemy.FireInterval * 0.6f);
                 }
@@ -1421,8 +1442,8 @@ public class Game1 : Game
                     _missionEndTimer = 3.0f;
                     _missionWon = false;
                     _explosions.Add(new Explosion { Position = _playerPos, Timer = 0f, Duration = 2.5f, MaxRadius = 1500f });
-                    _screenShakeTimer = 2.5f;
-                    _screenShakeMagnitude = 30f;
+                    _screenShakeTimer = 1.5f;
+                    _screenShakeMagnitude = 18f;
                 }
                 else if (won)
                 {
@@ -1536,6 +1557,9 @@ public class Game1 : Game
 
             int midY = ScreenHeight / 2;
 
+            // Next Mission Modifier Preview
+            DrawText("ANOMALY: " + GetMissionModifierLabel(_nextMissionModifier), 58, 80, Color.Orange, 2);
+
             // Federation Side
             int fedH = 128;
             int fedW = 128;
@@ -1638,8 +1662,18 @@ public class Game1 : Game
             DrawText("SCORE", 20, 20, Color.White, 3);
             DrawNumber(_score, 110, 15, Color.Yellow, 4);
 
-            DrawText("ACHIEVEMENTS", 490, ScreenHeight - 132, Color.White, 2);
-            int achievementY = ScreenHeight - 112;
+            // Recommended Ship Class for Next Mission
+            ShipClass recommendedShip = _currentMissionType switch
+            {
+                MissionType.BossHunt => ShipClass.Galaxy,  // Heavy firepower
+                MissionType.HoldTheLine => ShipClass.Excelsior,  // Balanced defense
+                _ => ShipClass.Defiant  // Speed for Assault
+            };
+            DrawText("RECOMMENDED: " + recommendedShip.ToString().ToUpper(), 490, ScreenHeight - 130, 
+                _playerShip == recommendedShip ? Color.LimeGreen : Color.White, 2);
+
+            DrawText("ACHIEVEMENTS", 490, ScreenHeight - 112, Color.White, 2);
+            int achievementY = ScreenHeight - 92;
             foreach (var achievement in _achievements)
             {
                 Color achievementColor = achievement.Unlocked ? Color.LimeGreen : Color.Gray;
@@ -1770,18 +1804,25 @@ public class Game1 : Game
                 _spriteBatch.Draw(_pixel, new Rectangle((int)start.X, (int)start.Y, (int)dist, 2), null, Color.White, angle, new Vector2(0, 1), SpriteEffects.None, 0f);
             }
 
-            // Draw Torpedoes (Photon Torpedoes)
+            // Draw Torpedoes (Photon Torpedoes) - Player fire
             foreach(var torp in _torpedoes)
             {
                 _spriteBatch.Draw(_pixel, new Rectangle((int)torp.Position.X - 4, (int)torp.Position.Y - 5, 8, 10), Color.OrangeRed);
                 _spriteBatch.Draw(_pixel, new Rectangle((int)torp.Position.X - 2, (int)torp.Position.Y - 3, 4, 6), Color.LightYellow);
+                // Add glow trail
+                _spriteBatch.Draw(_particleTexture, torp.Position, null, Color.OrangeRed * 0.3f, 0f, new Vector2(16, 16), 0.6f, SpriteEffects.None, 0f);
             }
 
             // Draw Enemy Projectiles (Dominion Polaron Beams)
             foreach(var proj in _enemyProjectiles)
             {
-                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.Position.X - 2, (int)proj.Position.Y - 10, 4, 20), Color.DarkMagenta);
-                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.Position.X - 1, (int)proj.Position.Y - 8, 2, 16), Color.Cyan);
+                // Wider, more menacing projectiles
+                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.Position.X - 3, (int)proj.Position.Y - 12, 6, 24), Color.DarkMagenta);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.Position.X - 2, (int)proj.Position.Y - 10, 4, 20), Color.Cyan);
+                _spriteBatch.Draw(_pixel, new Rectangle((int)proj.Position.X - 1, (int)proj.Position.Y - 8, 2, 16), Color.White);
+                // Add pulsing glow
+                float glowIntensity = 0.4f + 0.3f * (float)Math.Sin(proj.Position.Y * 0.05f);
+                _spriteBatch.Draw(_particleTexture, proj.Position, null, Color.Cyan * glowIntensity * 0.5f, 0f, new Vector2(16, 16), 0.8f, SpriteEffects.None, 0f);
             }
 
             // Draw Explosions
